@@ -1,4 +1,4 @@
-/* * Data converted from C:/Users/aluno/Desktop/embarcados/Projeto/sample_project/build/esp-idf/mbedtls/x509_crt_bundle
+/* * Data converted from C:/Users/aluno/Desktop/embarcados/Projeto/Embarcados_Trabalho/build/esp-idf/mbedtls/x509_crt_bundle
  */
 .data
 .section .rodata.embedded

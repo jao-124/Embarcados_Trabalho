@@ -1,13 +1,13 @@
 # Target labels
  bootloader
 # Source files and their labels
-C:/Users/aluno/Desktop/embarcados/Projeto/sample_project/build/CMakeFiles/bootloader
-C:/Users/aluno/Desktop/embarcados/Projeto/sample_project/build/CMakeFiles/bootloader.rule
-C:/Users/aluno/Desktop/embarcados/Projeto/sample_project/build/CMakeFiles/bootloader-complete.rule
-C:/Users/aluno/Desktop/embarcados/Projeto/sample_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule
-C:/Users/aluno/Desktop/embarcados/Projeto/sample_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule
-C:/Users/aluno/Desktop/embarcados/Projeto/sample_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule
-C:/Users/aluno/Desktop/embarcados/Projeto/sample_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule
-C:/Users/aluno/Desktop/embarcados/Projeto/sample_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule
-C:/Users/aluno/Desktop/embarcados/Projeto/sample_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule
-C:/Users/aluno/Desktop/embarcados/Projeto/sample_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule
+C:/Users/aluno/Desktop/embarcados/Projeto/Embarcados_Trabalho/build/CMakeFiles/bootloader
+C:/Users/aluno/Desktop/embarcados/Projeto/Embarcados_Trabalho/build/CMakeFiles/bootloader.rule
+C:/Users/aluno/Desktop/embarcados/Projeto/Embarcados_Trabalho/build/CMakeFiles/bootloader-complete.rule
+C:/Users/aluno/Desktop/embarcados/Projeto/Embarcados_Trabalho/build/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule
+C:/Users/aluno/Desktop/embarcados/Projeto/Embarcados_Trabalho/build/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule
+C:/Users/aluno/Desktop/embarcados/Projeto/Embarcados_Trabalho/build/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule
+C:/Users/aluno/Desktop/embarcados/Projeto/Embarcados_Trabalho/build/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule
+C:/Users/aluno/Desktop/embarcados/Projeto/Embarcados_Trabalho/build/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule
+C:/Users/aluno/Desktop/embarcados/Projeto/Embarcados_Trabalho/build/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule
+C:/Users/aluno/Desktop/embarcados/Projeto/Embarcados_Trabalho/build/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule

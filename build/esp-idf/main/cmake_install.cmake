@@ -1,4 +1,4 @@
-# Install script for directory: C:/Users/aluno/Desktop/embarcados/Projeto/sample_project/main
+# Install script for directory: C:/Users/aluno/Desktop/embarcados/Projeto/Embarcados_Trabalho/main
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
