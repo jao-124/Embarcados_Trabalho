@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "freertos/queue.h"
 #include "driver/gpio.h"
+#include "driver/gptimer.h"
 
 /*------------------------->DEFINIÇÃO DAS PORTAS DE SAÍDA<------------------------------*/
 /*#define GPIO_OUTPUT_IO_0    CONFIG_GPIO_OUTPUT_0    GPIO_OUTPUT_IO_0 = 0000000000000000000001000000000000000000
@@ -36,6 +37,7 @@
 /*DECLARANDO AS TAGS*/
 static const char* TAG_INFO_SYS_01 = "DADOS_SISTEMA";
 static const char* TAG_BOT_LED_02 = "BOT_LED";
+static const char* TAG_TIMER = "TIMER";
 
 /*---------------------------------->DECLARANDO A FILA<-------------------------------*/
 static QueueHandle_t gpio_evt_queue = NULL;
@@ -71,6 +73,33 @@ static void gpio_task_button(void* arg) //Tarefa associada aos botões
             vTaskDelay(10);
         }
     }
+}
+/*------------------>TASK DO TIMER<------------------------*/
+
+
+/*STRUCT DE CONTAGEM (TIMER)*/
+typedef struct {
+    uint64_t event_count;
+    uint64_t alarm_value;
+} queue_element_TIMER;
+
+/*---------------------->CRIAÇÃO DA CALLBACK (TASK) DO TIMER<---------------------------*/
+static bool IRAM_ATTR callback_timer_1(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
+{
+    BaseType_t high_task_awoken = pdFALSE;
+    QueueHandle_t queue = (QueueHandle_t)user_data;
+    // Retrieve count value and send to queue
+    queue_element_TIMER element = {
+        .event_count = edata->count_value
+    };
+    xQueueSendFromISR(queue, &element, &high_task_awoken);
+    // reconfigure alarm value
+    gptimer_alarm_config_t alarm_config = {
+        .alarm_count = edata->alarm_value + 1000000, // alarm in next 1s
+    };
+    gptimer_set_alarm_action(timer, &alarm_config);
+    // return whether we need to yield at the end of ISR
+    return (high_task_awoken == pdTRUE);
 }
 
 void app_main(void)
@@ -147,5 +176,54 @@ void app_main(void)
     gpio_isr_handler_add(GPIO_INPUT_IO_1, gpio_isr_handler, (void*) GPIO_INPUT_IO_1);
     gpio_isr_handler_add(GPIO_INPUT_IO_2, gpio_isr_handler, (void*) GPIO_INPUT_IO_2);
 
+    /*----------------------->CONFIGURAÇÃO DO TIMER - PT3<-------------------------*/    
+        /*CRIAÇÃO DA FILA*/
+    queue_element_TIMER element;
+    QueueHandle_t queue = xQueueCreate(10, sizeof(queue_element_TIMER));
+    if (!queue) {
+        ESP_LOGE(TAG_TIMER, "Creating queue failed");
+        return;
+    }
+
+    /*CRIAÇÃO DO HANDLE DO TIMER*/
+    gptimer_handle_t gptimer = NULL;
+    /*INICIALIZAÇÃO D0 TIMER*/
+    gptimer_config_t timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,//Contagem UP
+        .resolution_hz = 1000000, // 1MHz, 1 tick=1us
+    };
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
+
+    /*REGISTRO DO CALLBACK*/
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = callback_timer_1,
+    };
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, queue));
+    
+    /*HABILITAÇÃO DO TIMER*/
+    ESP_ERROR_CHECK(gptimer_enable(gptimer));
+
+    /*CONFIGURAÇÃO DO ALARME (PERÍODO DE CONTAGEM)*/
+    gptimer_alarm_config_t alarm_config1 = {
+        .alarm_count = 10000000, // period = 1s
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config1));
+    ESP_ERROR_CHECK(gptimer_start(gptimer));
+
+    int tempo = 10;
+    int horas=0;
+    int minutos=0;
+    int segundos=0;
+    while(tempo){
+        ++segundos;
+        if (xQueueReceive(queue, &element, pdMS_TO_TICKS(1000))) {
+            ESP_LOGI(TAG_TIMER,"Contagem de eventos: %d",element.event_count);
+            ESP_LOGI(TAG_TIMER, "%d:%d:%d", horas, minutos, segundos);
+        } else {
+            ESP_LOGW(TAG_TIMER, "Pulou");
+        }
+        --tempo;
+    }
     /*LOOP DA MAIN (PODE SER ELIMINADO)*/
 }
