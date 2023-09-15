@@ -102,6 +102,9 @@ static bool IRAM_ATTR callback_timer_1(gptimer_handle_t timer, const gptimer_ala
     return (high_task_awoken == pdTRUE);
 }
 
+
+printf("teste");
+
 void app_main(void)
 {
     /*----------------------->*PRINT DOS DADOS DO CHIP - PT1<----------------------*/
