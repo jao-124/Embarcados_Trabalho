@@ -40,13 +40,22 @@ static const char* TAG_BOT_LED_02 = "BOT_LED";
 static const char* TAG_TIMER = "TIMER";
 
 /*---------------------------------->DECLARANDO A FILA<-------------------------------*/
-static QueueHandle_t gpio_evt_queue = NULL;
+static QueueHandle_t gpio_evt_queue = NULL; // do IO
+static QueueHandle_t queue_timer = NULL; 
 
-/*--------------------------------->INTERRUPÇÃO<-------------------------------------*/
+typedef struct {    // do timer
+    uint64_t event_count;
+    uint64_t alarm_value;
+} queue_element_TIMER;
+
+gptimer_handle_t gptimer = NULL; // do TIMER
+
+/*--------------------------------->INTERRUPÇÃO DO GPIO<-------------------------------------*/
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
     uint32_t gpio_num = (uint32_t) arg;
-    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL); //Enviando endereço do pino que gerou a interrupção para a fila
+    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
+    //Enviando endereço do pino que gerou a interrupção para a fila
 }
 
 /*-------------------------->STRUCT DE UMA TASK A SER CRIADA<-----------------------*/
@@ -75,24 +84,42 @@ static void gpio_task_button(void* arg) //Tarefa associada aos botões
     }
 }
 /*------------------>TASK DO TIMER<------------------------*/
+int hora = 12, minuto = 0, segundo = 0;
+
+static void timer_task(void* arg) //Tarefa associada ao timer
+{
+    queue_element_TIMER element; //handle do timer
+    for(;;) {
+        if(xQueueReceive(queue_timer, &element, portMAX_DELAY)) {       
+            if(segundo == 60){
+                minuto ++;
+            }
+            if(minuto == 60){
+                hora ++;
+            }
+            if(hora == 24){
+                hora = 0;
+            }
+
+            segundo ++;
+            ESP_LOGI(TAG_TIMER,"%d:%d:%d\n", hora, minuto, segundo);
+        }
+        
+    }
+}
 
 
-/*STRUCT DE CONTAGEM (TIMER)*/
-typedef struct {
-    uint64_t event_count;
-    uint64_t alarm_value;
-} queue_element_TIMER;
 
-/*---------------------->CRIAÇÃO DA CALLBACK (TASK) DO TIMER<---------------------------*/
+/*---------------------->CRIAÇÃO DA CALLBACK DO TIMER - ESTRUTURA<---------------------------*/
 static bool IRAM_ATTR callback_timer_1(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
 {
     BaseType_t high_task_awoken = pdFALSE;
-    QueueHandle_t queue = (QueueHandle_t)user_data;
+   
     // Retrieve count value and send to queue
     queue_element_TIMER element = {
         .event_count = edata->count_value
     };
-    xQueueSendFromISR(queue, &element, &high_task_awoken);
+    xQueueSendFromISR(queue_timer, &element, &high_task_awoken);
     // reconfigure alarm value
     gptimer_alarm_config_t alarm_config = {
         .alarm_count = edata->alarm_value + 1000000, // alarm in next 1s
@@ -101,9 +128,6 @@ static bool IRAM_ATTR callback_timer_1(gptimer_handle_t timer, const gptimer_ala
     // return whether we need to yield at the end of ISR
     return (high_task_awoken == pdTRUE);
 }
-
-
-printf("teste");
 
 void app_main(void)
 {
@@ -165,9 +189,7 @@ void app_main(void)
     //create a queue to handle gpio event from isr
     gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
 
-    /*----------->CRIAÇÃO DE UMA TASK ATRIBUÍDA À STRUCT CRIADA<-----------------*/
-    //start gpio task
-    xTaskCreate(gpio_task_button, "gpio_task_button", 2048, NULL, 10, NULL);
+    
 
     /*---------------------->INSTALANDO A INTERRUPÇÃO<--------------------------*/
     //install gpio isr service
@@ -180,16 +202,14 @@ void app_main(void)
     gpio_isr_handler_add(GPIO_INPUT_IO_2, gpio_isr_handler, (void*) GPIO_INPUT_IO_2);
 
     /*----------------------->CONFIGURAÇÃO DO TIMER - PT3<-------------------------*/    
-        /*CRIAÇÃO DA FILA*/
-    queue_element_TIMER element;
-    QueueHandle_t queue = xQueueCreate(10, sizeof(queue_element_TIMER));
-    if (!queue) {
+        /*CRIAÇÃO DA FILA DO TIMER*/
+    queue_timer = xQueueCreate(10, sizeof(queue_element_TIMER));
+    if (!queue_timer) {
         ESP_LOGE(TAG_TIMER, "Creating queue failed");
         return;
     }
 
-    /*CRIAÇÃO DO HANDLE DO TIMER*/
-    gptimer_handle_t gptimer = NULL;
+
     /*INICIALIZAÇÃO D0 TIMER*/
     gptimer_config_t timer_config = {
         .clk_src = GPTIMER_CLK_SRC_DEFAULT,
@@ -198,35 +218,28 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
 
-    /*REGISTRO DO CALLBACK*/
-    gptimer_event_callbacks_t cbs = {
-        .on_alarm = callback_timer_1,
-    };
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, queue));
-    
     /*HABILITAÇÃO DO TIMER*/
     ESP_ERROR_CHECK(gptimer_enable(gptimer));
 
-    /*CONFIGURAÇÃO DO ALARME (PERÍODO DE CONTAGEM)*/
+    /*REGISTRO (INICIALIZACAO) DO CALLBACK*/
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = callback_timer_1,
+    };
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, NULL));
+
+    /*CONFIGURAÇÃO DO ALARME (PERÍODO DE CONTAGEM) - QUE VAI GERAR A INTERRUPCAO*/
     gptimer_alarm_config_t alarm_config1 = {
         .alarm_count = 10000000, // period = 1s
     };
     ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config1));
     ESP_ERROR_CHECK(gptimer_start(gptimer));
 
-    int tempo = 10;
-    int horas=0;
-    int minutos=0;
-    int segundos=0;
-    while(tempo){
-        ++segundos;
-        if (xQueueReceive(queue, &element, pdMS_TO_TICKS(1000))) {
-            ESP_LOGI(TAG_TIMER,"Contagem de eventos: %d",element.event_count);
-            ESP_LOGI(TAG_TIMER, "%d:%d:%d", horas, minutos, segundos);
-        } else {
-            ESP_LOGW(TAG_TIMER, "Pulou");
-        }
-        --tempo;
-    }
     /*LOOP DA MAIN (PODE SER ELIMINADO)*/
+
+    /*----------->CRIAÇÃO DE UMA TASK ATRIBUÍDA À STRUCT CRIADA<-----------------*/
+    //start gpio task
+    xTaskCreate(gpio_task_button, "gpio_task_button", 2048, NULL, 10, NULL);
+
+    //start timer task
+    xTaskCreate(timer_task, "timer_task", 2048, NULL, 9, NULL);
 }
