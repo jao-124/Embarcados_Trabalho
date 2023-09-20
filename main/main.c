@@ -91,7 +91,7 @@ static void timer_task(void* arg) //Tarefa associada ao timer
     queue_element_TIMER element; //handle do timer
     for(;;) {
         if(xQueueReceive(queue_timer, &element, portMAX_DELAY)) {       
-            if(segundo == 60){
+            if(segundo == 59){
                 minuto ++;
                 segundo = 0;
             }
