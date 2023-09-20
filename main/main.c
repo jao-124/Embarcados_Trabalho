@@ -84,7 +84,7 @@ static void gpio_task_button(void* arg) //Tarefa associada aos botões
     }
 }
 /*------------------>TASK DO TIMER<------------------------*/
-int hora = 12, minuto = 0, segundo = 0;
+int hora = 0, minuto = 0, segundo = 0;
 
 static void timer_task(void* arg) //Tarefa associada ao timer
 {
@@ -93,21 +93,22 @@ static void timer_task(void* arg) //Tarefa associada ao timer
         if(xQueueReceive(queue_timer, &element, portMAX_DELAY)) {       
             if(segundo == 60){
                 minuto ++;
+                segundo = 0;
             }
             if(minuto == 60){
                 hora ++;
+                minuto = 0;
             }
             if(hora == 24){
                 hora = 0;
+                minuto = 0;
+                segundo = 0;
             }
-
             segundo ++;
             ESP_LOGI(TAG_TIMER,"%d:%d:%d\n", hora, minuto, segundo);
         }
-        
     }
 }
-
 
 
 /*---------------------->CRIAÇÃO DA CALLBACK DO TIMER - ESTRUTURA<---------------------------*/
@@ -189,7 +190,6 @@ void app_main(void)
     //create a queue to handle gpio event from isr
     gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
 
-    
 
     /*---------------------->INSTALANDO A INTERRUPÇÃO<--------------------------*/
     //install gpio isr service
@@ -209,7 +209,6 @@ void app_main(void)
         return;
     }
 
-
     /*INICIALIZAÇÃO D0 TIMER*/
     gptimer_config_t timer_config = {
         .clk_src = GPTIMER_CLK_SRC_DEFAULT,
@@ -218,14 +217,14 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
 
-    /*HABILITAÇÃO DO TIMER*/
-    ESP_ERROR_CHECK(gptimer_enable(gptimer));
-
     /*REGISTRO (INICIALIZACAO) DO CALLBACK*/
     gptimer_event_callbacks_t cbs = {
         .on_alarm = callback_timer_1,
     };
     ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, NULL));
+
+    /*HABILITAÇÃO DO TIMER*/
+    ESP_ERROR_CHECK(gptimer_enable(gptimer));
 
     /*CONFIGURAÇÃO DO ALARME (PERÍODO DE CONTAGEM) - QUE VAI GERAR A INTERRUPCAO*/
     gptimer_alarm_config_t alarm_config1 = {
