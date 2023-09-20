@@ -95,7 +95,7 @@ static void timer_task(void* arg) //Tarefa associada ao timer
                 minuto ++;
                 segundo = 0;
             }
-            if(minuto == 60){
+            if(minuto == 59){
                 hora ++;
                 minuto = 0;
             }
