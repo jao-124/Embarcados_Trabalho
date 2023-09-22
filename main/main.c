@@ -112,7 +112,7 @@ static void timer_task(void* arg) //Tarefa associada ao timer
                 segundo = 0;
             }
             segundo ++;            
-            ESP_LOGI(TAG_TIMER,"%d:%d:%d Timer = %llu\n", hora, minuto, segundo, count);
+            ESP_LOGI(TAG_TIMER,"%d:%d:%d Timer = %llu; Alarm = %llu\n", hora, minuto, segundo, element->event_count, element->alarm_value);
         }
     }
 }
@@ -130,7 +130,9 @@ static bool IRAM_ATTR callback_timer_1(gptimer_handle_t timer, const gptimer_ala
     xQueueSendFromISR(queue_timer, &element, &high_task_awoken);
     // reconfigure alarm value
     gptimer_alarm_config_t alarm_config = {
+        .reload_count = 0,
         .alarm_count = edata->alarm_value + 1000000, // alarm in next 1s
+        .flags.auto_reload_on_alarm = true,
     };
     gptimer_set_alarm_action(timer, &alarm_config);
     // return whether we need to yield at the end of ISR
@@ -146,7 +148,7 @@ void app_main(void)
     uint32_t flash_size;
     esp_chip_info(&chip_info);
     ESP_LOGI(TAG_INFO_SYS_01, "This is %s chip with %d CPU core(s), WiFi%s%s%s, ",
-           CONFIG_IDF_TARGET,
+            CONFIG_IDF_TARGET,
             chip_info.cores,
            (chip_info.features & CHIP_FEATURE_BT) ? "/BT" : "",
            (chip_info.features & CHIP_FEATURE_BLE) ? "/BLE" : "",
@@ -162,7 +164,7 @@ void app_main(void)
     }
 
     /*----------------------->*CONFIGURAÇÃO DO GPIO - PT2<-------------------------*/
-
+    
     /*CONFIGURANDO AS SAÍDAS*/ 
     //zero-initialize the config structure.
     gpio_config_t io_conf = {};
