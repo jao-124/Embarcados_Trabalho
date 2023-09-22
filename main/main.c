@@ -14,6 +14,10 @@
 #include "driver/ledc.h"
 #include "esp_err.h"
 
+/****************************************************************************************/
+/*---------------------------------->VARIÁVEIS GLOBAIS<---------------------------------*/
+/****************************************************************************************/
+
 /*------------------------->DEFINIÇÃO DAS PORTAS DE SAÍDA<------------------------------*/
 /*#define GPIO_OUTPUT_IO_0    CONFIG_GPIO_OUTPUT_0    GPIO_OUTPUT_IO_0 = 0000000000000000000001000000000000000000
 #define GPIO_OUTPUT_IO_1    CONFIG_GPIO_OUTPUT_1    GPIO_OUTPUT_IO_1 = 0000000000000000000010000000000000000000    
@@ -32,7 +36,7 @@
 #define GPIO_INPUT_IO_2 23
 #define GPIO_INPUT_PIN_SEL  ((1ULL<<GPIO_INPUT_IO_0) | (1ULL<<GPIO_INPUT_IO_1) | (1ULL<<GPIO_INPUT_IO_2))  //Vetor dos pinos de entrada
 
-/*VARIÁVEIS GLOBAIS COM OS ATRIBUTOS DE CONFIGURAÇÃO DO PWM*/
+/*---------->-VARIÁVEIS GLOBAIS COM OS ATRIBUTOS DE CONFIGURAÇÃO DO PWM<---------------*/
 #define LEDC_TIMER              LEDC_TIMER_0
 #define LEDC_MODE               LEDC_LOW_SPEED_MODE
 #define LEDC_OUTPUT_IO          (16) // Define the output GPIO 16 LED
@@ -40,34 +44,46 @@
 #define LEDC_CHANNEL            LEDC_CHANNEL_0 //Configuração do canal do LED
 #define PWM_CHANNEL             LEDC_CHANNEL_1 //Configuração do canal do LED
 #define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
-#define LEDC_DUTY               (4095) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
+#define LEDC_DUTY               (4095*1/4) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
 #define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
 
+/****************************************************************************************/
 /*-------------------------->CRIAÇÃO DA FLAG DE INTERRUPÇÃO<---------------------------*/
+/****************************************************************************************/
 #define ESP_INTR_FLAG_DEFAULT 0
 
-/*DECLARANDO AS TAGS*/
+/****************************************************************************************/
+/*-------------------------------->DECLARANDO AS TAGS<----------------------------------*/
+/****************************************************************************************/
 static const char* TAG_INFO_SYS_01 = "DADOS_SISTEMA";
 static const char* TAG_BOT_LED_02 = "BOT_LED";
 static const char* TAG_TIMER = "TIMER";
 //static const char* TAG_PWM = "PWM";
 
-/*---------------------------------->DECLARANDO A FILA<-------------------------------*/
-static QueueHandle_t gpio_evt_queue = NULL; // do IO
-static QueueHandle_t queue_timer = NULL; 
-
 /****************************************************************************************/
-typedef struct {    // do timer
+/*---------------------------------->DECLARANDO A FILA<---------------------------------*/
+/****************************************************************************************/
+static QueueHandle_t gpio_evt_queue = NULL; // do IO
+static QueueHandle_t queue_timer = NULL; //do Timer
+
+//Struct para passafem de parâmetros do TIMER para a fila
+typedef struct { 
     uint64_t event_count;
-    uint64_t alarm_value;
+    uint64_t alarm_count;
 } queue_element_TIMER;
 
-gptimer_handle_t gptimer = NULL; // do TIMER
+//Handle do TIMER
+gptimer_handle_t gptimer = NULL;
 
-/*-------------------------->STRUCT DE UMA TASK A SER CRIADA<-----------------------*/
+/****************************************************************************************/
+/*-------------------------->ESTRUTURAS E ROTINAS DAS TASKS<----------------------------*/
+/****************************************************************************************/
+
+/*------------------------------->TASK DO GPIO<----------------------------------------*/
+//Declaração de variáveis
 bool estado = false;
 
-/*------------------>TASK DO GPIO<------------------------*/
+//Task propriamente dita
 static void gpio_task_button(void* arg) //Tarefa associada aos botões
 {
     uint32_t io_num;
@@ -91,18 +107,21 @@ static void gpio_task_button(void* arg) //Tarefa associada aos botões
         }
     }
 }
-/*------------------>TASK DO TIMER<------------------------*/
+/*------------------------------->TASK DO TIMER<----------------------------------------*/
+//Declaração de variáveis
 int hora = 0, minuto = 0, segundo = 0;
 
+//Task propriamente dita
 static void timer_task(void* arg) //Tarefa associada ao timer
 {
     ESP_ERROR_CHECK(gptimer_set_raw_count(gptimer, 100));
     
-    uint64_t count;
+    uint64_t count_timer;
+
+    ESP_ERROR_CHECK(gptimer_get_raw_count(gptimer, &count_timer));
     
-    ESP_ERROR_CHECK(gptimer_get_raw_count(gptimer, &count));
-    
-    queue_element_TIMER element; //handle do timer
+    queue_element_TIMER element; //Parâmetro da fila
+
     for(;;) {
         if(xQueueReceive(queue_timer, &element, portMAX_DELAY)) {       
             if(segundo == 59){
@@ -119,13 +138,14 @@ static void timer_task(void* arg) //Tarefa associada ao timer
                 segundo = 0;
             }
             segundo ++;            
-            ESP_LOGI(TAG_TIMER,"%d:%d:%d Timer = %llu; Alarm = %llu\n", hora, minuto, segundo, element.event_count, element.alarm_value);
+            ESP_LOGI(TAG_TIMER,"%d:%d:%d Timer = %llu; Alarm = %llu\n", hora, minuto, segundo, element.event_count, element.alarm_count);
         }
     }
 }
 
 
-/*------------------>TASK DO PWM - PT4<------------------------*/
+/*------------------------------->TASK DO PWM<----------------------------------------*/
+//Função de configuração do PWM
 static void example_PWMledc_init(void)
 {
     // Preparação da configuração do TIMER DO PWM
@@ -136,7 +156,7 @@ static void example_PWMledc_init(void)
         .freq_hz          = LEDC_FREQUENCY,  // Set output frequency at 5 kHz
         .clk_cfg          = LEDC_AUTO_CLK
     };
-    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer)); //Carregando a configuração do timer
+    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer)); //Carregando a configuração do timer do PWM
 
     // Preparação da configuração do canal PWM do LED
     ledc_channel_config_t ledc_channel_0 = {
@@ -148,7 +168,7 @@ static void example_PWMledc_init(void)
         .duty           = 0, // Set duty to 0%
         .hpoint         = 0
     };
-    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel_0));//Carregando a configuração do LED
+    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel_0));//Carregando a configuração do canal do LED
 
     // Preparação da configuração do canal PWM da saída
     ledc_channel_config_t ledc_channel_1 = {
@@ -161,9 +181,9 @@ static void example_PWMledc_init(void)
         .hpoint         = 0
     };
     ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel_1));//Carregando a configuração do LED
-
 }
 
+//Task propriamente dita
 static void PWM_task(void* arg) //Tarefa associada ao PWM
 {
     // Set the LEDC peripheral configuration
@@ -173,15 +193,17 @@ static void PWM_task(void* arg) //Tarefa associada ao PWM
     // Update duty to apply the new value
     ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
 
-
     while(1){
 
         vTaskDelay(10);
     }
-
 }
 
-/*--------------------------------->INTERRUPÇÃO DO GPIO<-------------------------------------*/
+/****************************************************************************************/
+/*------------------------------------>INTERRUPÇÕES<------------------------------------*/
+/****************************************************************************************/
+
+/*--------------------------------->INTERRUPÇÃO DO GPIO<--------------------------------*/
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
     uint32_t gpio_num = (uint32_t) arg;
@@ -189,14 +211,15 @@ static void IRAM_ATTR gpio_isr_handler(void* arg)
     //Enviando endereço do pino que gerou a interrupção para a fila
 }
 
-/*---------------------->CRIAÇÃO DA CALLBACK DO TIMER - ESTRUTURA<---------------------------*/
+/*-------------------->CRIAÇÃO DA CALLBACK DO TIMER - ESTRUTURA<-------------------------*/
 static bool IRAM_ATTR callback_timer_1(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
 {
     BaseType_t high_task_awoken = pdFALSE;
    
     // Retrieve count value and send to queue
     queue_element_TIMER element = {
-        .event_count = edata->count_value
+        .event_count = edata->count_value,
+        .alarm_count = edata->alarm_value,
     };
     xQueueSendFromISR(queue_timer, &element, &high_task_awoken);
     // reconfigure alarm value
@@ -209,6 +232,10 @@ static bool IRAM_ATTR callback_timer_1(gptimer_handle_t timer, const gptimer_ala
     // return whether we need to yield at the end of ISR
     return (high_task_awoken == pdTRUE);
 }
+
+/****************************************************************************************/
+/*---------------------------------------->MAIN<----------------------------------------*/
+/****************************************************************************************/
 
 void app_main(void)
 {
