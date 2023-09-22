@@ -43,6 +43,7 @@ static const char* TAG_TIMER = "TIMER";
 static QueueHandle_t gpio_evt_queue = NULL; // do IO
 static QueueHandle_t queue_timer = NULL; 
 
+/****************************************************************************************/
 typedef struct {    // do timer
     uint64_t event_count;
     uint64_t alarm_value;
@@ -88,6 +89,12 @@ int hora = 0, minuto = 0, segundo = 0;
 
 static void timer_task(void* arg) //Tarefa associada ao timer
 {
+    ESP_ERROR_CHECK(gptimer_set_raw_count(gptimer, 100));
+    
+    uint64_t count;
+    
+    ESP_ERROR_CHECK(gptimer_get_raw_count(gptimer, &count));
+    
     queue_element_TIMER element; //handle do timer
     for(;;) {
         if(xQueueReceive(queue_timer, &element, portMAX_DELAY)) {       
@@ -104,8 +111,8 @@ static void timer_task(void* arg) //Tarefa associada ao timer
                 minuto = 0;
                 segundo = 0;
             }
-            segundo ++;
-            ESP_LOGI(TAG_TIMER,"%d:%d:%d\n", hora, minuto, segundo);
+            segundo ++;            
+            ESP_LOGI(TAG_TIMER,"%d:%d:%d Timer = %llu\n", hora, minuto, segundo, count);
         }
     }
 }
@@ -228,7 +235,7 @@ void app_main(void)
 
     /*CONFIGURAÇÃO DO ALARME (PERÍODO DE CONTAGEM) - QUE VAI GERAR A INTERRUPCAO*/
     gptimer_alarm_config_t alarm_config1 = {
-        .alarm_count = 10000000, // period = 1s
+        .alarm_count = 100000, // period = 1s
     };
     ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config1));
     ESP_ERROR_CHECK(gptimer_start(gptimer));
