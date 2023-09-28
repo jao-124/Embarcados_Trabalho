@@ -66,14 +66,14 @@ static const char* TAG_TIMER = "TIMER";
 static QueueHandle_t gpio_evt_queue = NULL; // do IO
 static QueueHandle_t queue_timer = NULL; //do Timer
 
-//Struct para passafem de parâmetros do TIMER para a fila
+//Struct para passagem de parâmetros do TIMER para a fila
 typedef struct { 
     uint64_t event_count;
     uint64_t alarm_count;
 } queue_element_TIMER;
 
 //Handle do TIMER
-gptimer_handle_t gptimer = NULL;
+gptimer_handle_t gptimer = NULL //Desclaração do handle 
 
 /****************************************************************************************/
 /*-------------------------->ESTRUTURAS E ROTINAS DAS TASKS<----------------------------*/
@@ -120,7 +120,7 @@ static void timer_task(void* arg) //Tarefa associada ao timer
 
     ESP_ERROR_CHECK(gptimer_get_raw_count(gptimer, &count_timer));
     
-    queue_element_TIMER element; //Parâmetro da fila
+    queue_element_TIMER element; //Parâmetro da fila, declarado com tipo igual à struct criada
 
     for(;;) {
         if(xQueueReceive(queue_timer, &element, portMAX_DELAY)) {       
@@ -309,7 +309,7 @@ void app_main(void)
     gpio_isr_handler_add(GPIO_INPUT_IO_2, gpio_isr_handler, (void*) GPIO_INPUT_IO_2);
 
     /*----------------------->CONFIGURAÇÃO DO TIMER - PT3<-------------------------*/    
-        /*CRIAÇÃO DA FILA DO TIMER*/
+    /*CRIAÇÃO DA FILA DO TIMER*/
     queue_timer = xQueueCreate(10, sizeof(queue_element_TIMER));
     if (!queue_timer) {
         ESP_LOGE(TAG_TIMER, "Creating queue failed");
