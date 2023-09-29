@@ -73,7 +73,7 @@ typedef struct {
 } queue_element_TIMER;
 
 //Handle do TIMER
-gptimer_handle_t gptimer = NULL //Desclaração do handle 
+gptimer_handle_t gptimer = NULL; //Desclaração do handle 
 
 /****************************************************************************************/
 /*-------------------------->ESTRUTURAS E ROTINAS DAS TASKS<----------------------------*/
