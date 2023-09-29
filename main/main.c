@@ -10,9 +10,11 @@
 #include "esp_log.h"
 #include "freertos/queue.h"
 #include "driver/gpio.h"
-#include "driver/gptimer.h"
+#include "driver/gptimer.h" 
 #include "driver/ledc.h"
 #include "esp_err.h"
+#include "freertos/semphr.h"
+
 
 /****************************************************************************************/
 /*---------------------------------->VARIÁVEIS GLOBAIS<---------------------------------*/
@@ -44,8 +46,9 @@
 #define LEDC_CHANNEL            LEDC_CHANNEL_0 //Configuração do canal do LED
 #define PWM_CHANNEL             LEDC_CHANNEL_1 //Configuração do canal do LED
 #define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
-#define LEDC_DUTY               (4095*1/4) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
+#define LEDC_DUTY               (4095) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
 #define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
+
 
 /****************************************************************************************/
 /*-------------------------->CRIAÇÃO DA FLAG DE INTERRUPÇÃO<---------------------------*/
@@ -58,13 +61,14 @@
 static const char* TAG_INFO_SYS_01 = "DADOS_SISTEMA";
 static const char* TAG_BOT_LED_02 = "BOT_LED";
 static const char* TAG_TIMER = "TIMER";
-//static const char* TAG_PWM = "PWM";
+static const char* TAG_PWM = "PWM";
 
 /****************************************************************************************/
 /*---------------------------------->DECLARANDO A FILA<---------------------------------*/
 /****************************************************************************************/
 static QueueHandle_t gpio_evt_queue = NULL; // do IO
 static QueueHandle_t queue_timer = NULL; //do Timer
+static QueueHandle_t queue_pwm   = NULL; //do PWM
 
 //Struct para passagem de parâmetros do TIMER para a fila
 typedef struct { 
@@ -74,6 +78,16 @@ typedef struct {
 
 //Handle do TIMER
 gptimer_handle_t gptimer = NULL; //Desclaração do handle 
+
+//Handle PWM
+typedef struct { 
+    bool mode_auto;
+    int16_t pwm_queue;
+} PWM_elements_t;
+
+
+//Handle do semaforo
+static SemaphoreHandle_t semaphore_pwm = NULL;// Semaforo
 
 /****************************************************************************************/
 /*-------------------------->ESTRUTURAS E ROTINAS DAS TASKS<----------------------------*/
@@ -86,30 +100,61 @@ bool estado = false;
 //Task propriamente dita
 static void gpio_task_button(void* arg) //Tarefa associada aos botões
 {
+    char modo;
+
     uint32_t io_num;
+
+    PWM_elements_t elementos_PWM; //Elemento de passagem para a fila do PWM
+    //elementos_PWM.mode_auto = 1;
+
     for(;;) {
         if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
+            if(elementos_PWM.mode_auto){
+                modo = 'A';
+            }else{
+                modo = 'M';
+            }
+
             /*ESTRUTURA CONDICIONAL PARA ACIONAMENTO DO LED*/
-            if (gpio_get_level(GPIO_INPUT_IO_0)){
+            if (gpio_get_level(GPIO_INPUT_IO_0)){   //21
                 estado = true;
                 gpio_set_level(GPIO_OUTPUT_IO_0,estado);
+
+                elementos_PWM.mode_auto = true;
+                elementos_PWM.pwm_queue = 0;
+                
+                ESP_LOGI(TAG_PWM,"Modo: %c,Duty cycle: %d\n", modo,elementos_PWM.pwm_queue); //Printando os dados do o duty cycle atual
             }
-            if (gpio_get_level(GPIO_INPUT_IO_1)){
+            if (gpio_get_level(GPIO_INPUT_IO_1)){   //22
                 estado = false;
                 gpio_set_level(GPIO_OUTPUT_IO_0,estado);
+
+                elementos_PWM.mode_auto = false;
+
+                ESP_LOGI(TAG_PWM,"Modo: %c,Duty cycle: %d\n", modo,elementos_PWM.pwm_queue);
             }
-            if (gpio_get_level(GPIO_INPUT_IO_2)){
+            if (gpio_get_level(GPIO_INPUT_IO_2)){   //23
                 gpio_set_level(GPIO_OUTPUT_IO_0,!estado);
+
+                if(!elementos_PWM.mode_auto){
+                    ++elementos_PWM.pwm_queue;
+                }
+                
+                ESP_LOGI(TAG_PWM,"Modo: %c, Duty cycle: %d\n", modo, elementos_PWM.pwm_queue);
             }
             //printf("GPIO[%"PRIu32"] intr, val: %d\n", io_num, gpio_get_level(io_num));
             ESP_LOGI(TAG_BOT_LED_02,"GPIO[%"PRIu32"] intr, val: %d\n", io_num, gpio_get_level(io_num)); //Printando os dados do pino e o nível lógico associado
+            //Mandar dados para a fila do PWM
+            xQueueSendFromISR(queue_pwm, &elementos_PWM, NULL);           
             vTaskDelay(10);
         }
     }
 }
 /*------------------------------->TASK DO TIMER<----------------------------------------*/
 //Declaração de variáveis
-int hora = 0, minuto = 0, segundo = 0;
+int hora = 0, minuto = 0, segundo = 0, cemms = 0;
+
+queue_element_TIMER element; //Parâmetro da fila, declarado com tipo igual à struct criada
 
 //Task propriamente dita
 static void timer_task(void* arg) //Tarefa associada ao timer
@@ -119,8 +164,6 @@ static void timer_task(void* arg) //Tarefa associada ao timer
     uint64_t count_timer;
 
     ESP_ERROR_CHECK(gptimer_get_raw_count(gptimer, &count_timer));
-    
-    queue_element_TIMER element; //Parâmetro da fila, declarado com tipo igual à struct criada
 
     for(;;) {
         if(xQueueReceive(queue_timer, &element, portMAX_DELAY)) {       
@@ -137,8 +180,15 @@ static void timer_task(void* arg) //Tarefa associada ao timer
                 minuto = 0;
                 segundo = 0;
             }
-            segundo ++;            
-            ESP_LOGI(TAG_TIMER,"%d:%d:%d Timer = %llu; Alarm = %llu\n", hora, minuto, segundo, element.event_count, element.alarm_count);
+            cemms ++;
+
+            if(cemms == 10){
+                segundo ++; //10x 
+                cemms = 0;
+                ESP_LOGI(TAG_TIMER,"%d:%d:%d; Timer = %llu; Alarm = %llu\n", hora, minuto, segundo, element.event_count, element.alarm_count);
+            }
+
+            xSemaphoreGive(semaphore_pwm);//Semaforo para PWM
         }
     }
 }
@@ -180,22 +230,38 @@ static void example_PWMledc_init(void)
         .duty           = 0, // Set duty to 0%
         .hpoint         = 0
     };
-    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel_1));//Carregando a configuração do LED
+    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel_1));//Carregando a configuração do PWM
+
 }
+
+PWM_elements_t elementos_PWM_r; //Elemento de recebimento da fila do PWM
+int i = 0;
 
 //Task propriamente dita
 static void PWM_task(void* arg) //Tarefa associada ao PWM
 {
+
     // Set the LEDC peripheral configuration
     example_PWMledc_init();
-    // Set duty to 50%
-    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY));
+    
     // Update duty to apply the new value
     ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
 
     while(1){
+        if(xSemaphoreTake(semaphore_pwm, portMAX_DELAY)){
+            xQueueReceive(queue_pwm, &elementos_PWM_r, 1000);//Recebendo elementos da fila do PWM
+            // Set duty
+            if(elementos_PWM_r.mode_auto){
+                if(i==2*4095){
+                    i = 0;
+                }
+                i = i + 4095;      
 
-        vTaskDelay(10);
+                ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, i));  
+            }else{
+                ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, ((2*4095)*(elementos_PWM_r.pwm_queue/100))));
+            }
+        }
     }
 }
 
@@ -221,12 +287,12 @@ static bool IRAM_ATTR callback_timer_1(gptimer_handle_t timer, const gptimer_ala
         .event_count = edata->count_value,
         .alarm_count = edata->alarm_value,
     };
-    xQueueSendFromISR(queue_timer, &element, &high_task_awoken);
+    xQueueSendFromISR(, &element, &high_task_awoken);
     // reconfigure alarm value
     gptimer_alarm_config_t alarm_config = {
         .reload_count = 0,
         .alarm_count = edata->alarm_value + 1000000, // alarm in next 1s
-        .flags.auto_reload_on_alarm = true,
+        //.flags.auto_reload_on_alarm = true,
     };
     gptimer_set_alarm_action(timer, &alarm_config);
     // return whether we need to yield at the end of ISR
@@ -320,7 +386,7 @@ void app_main(void)
     gptimer_config_t timer_config = {
         .clk_src = GPTIMER_CLK_SRC_DEFAULT,
         .direction = GPTIMER_COUNT_UP,//Contagem UP
-        .resolution_hz = 1000000, // 1MHz, 1 tick=1us
+        .resolution_hz = 10000000, // 10 MHz, 1 tick = 0.1us
     };
     ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
 
@@ -335,10 +401,22 @@ void app_main(void)
 
     /*CONFIGURAÇÃO DO ALARME (PERÍODO DE CONTAGEM) - QUE VAI GERAR A INTERRUPCAO*/
     gptimer_alarm_config_t alarm_config1 = {
-        .alarm_count = 100000, // period = 1s
+        .alarm_count = 1000000, // 6 zeros // period = 100 mili fixo
     };
     ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config1));
     ESP_ERROR_CHECK(gptimer_start(gptimer));
+
+    /*----------------------->CONFIGURAÇÃO DO PWM - PT4<-------------------------*/
+
+    semaphore_pwm = xSemaphoreCreateBinary(); // criação do semaphore binario
+    //xSemaphoreGive(semaphore_pwm); //Função na TASK Timer para sincronizar com a task 
+    //xSemaphoreTake(semaphore_pwm, portMAX_DELAY);
+
+    queue_pwm = xQueueCreate(10, sizeof(PWM_elements_t));
+    if (!queue_pwm) {
+        ESP_LOGE(TAG_TIMER, "Creating queue failed");
+        return;
+    }
 
     /*LOOP DA MAIN (PODE SER ELIMINADO)*/
 
