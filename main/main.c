@@ -287,7 +287,7 @@ static bool IRAM_ATTR callback_timer_1(gptimer_handle_t timer, const gptimer_ala
         .event_count = edata->count_value,
         .alarm_count = edata->alarm_value,
     };
-    xQueueSendFromISR(, &element, &high_task_awoken);
+    xQueueSendFromISR(queue_timer, &element, &high_task_awoken);
     // reconfigure alarm value
     gptimer_alarm_config_t alarm_config = {
         .reload_count = 0,
