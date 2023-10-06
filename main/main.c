@@ -95,7 +95,7 @@ static SemaphoreHandle_t semaphore_pwm = NULL;// Semaforo
 
 /*------------------------------->TASK DO GPIO<----------------------------------------*/
 //Declaração de variáveis
-bool estado = false;
+//bool estado = false;
 
 //Task propriamente dita
 static void gpio_task_button(void* arg) //Tarefa associada aos botões
@@ -105,45 +105,48 @@ static void gpio_task_button(void* arg) //Tarefa associada aos botões
     uint32_t io_num;
 
     PWM_elements_t elementos_PWM; //Elemento de passagem para a fila do PWM
-    //elementos_PWM.mode_auto = 1;
 
     for(;;) {
         if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
-            if(elementos_PWM.mode_auto){
-                modo = 'A';
-            }else{
-                modo = 'M';
-            }
+            switch (io_num)
+            {
+                case 21: //21
+                    modo = 'A';
+                    //estado = true;
+                    
+                    gpio_set_level(GPIO_OUTPUT_IO_0,1);
 
-            /*ESTRUTURA CONDICIONAL PARA ACIONAMENTO DO LED*/
-            if (gpio_get_level(GPIO_INPUT_IO_0)){   //21
-                estado = true;
-                gpio_set_level(GPIO_OUTPUT_IO_0,estado);
-
-                elementos_PWM.mode_auto = true;
-                elementos_PWM.pwm_queue = 0;
+                    elementos_PWM.mode_auto = true;
+                    elementos_PWM.pwm_queue = 0;
+                    
+                    ESP_LOGI(TAG_PWM,"Modo: %c,Duty cycle: %d\n", modo,elementos_PWM.pwm_queue); //Printando os dados do o duty cycle atual
+                    break;
                 
-                ESP_LOGI(TAG_PWM,"Modo: %c,Duty cycle: %d\n", modo,elementos_PWM.pwm_queue); //Printando os dados do o duty cycle atual
-            }
-            if (gpio_get_level(GPIO_INPUT_IO_1)){   //22
-                estado = false;
-                gpio_set_level(GPIO_OUTPUT_IO_0,estado);
+                case 22: //22
+                    modo = 'M';
+                    //estado = false;
+                    gpio_set_level(GPIO_OUTPUT_IO_0,1);
 
-                elementos_PWM.mode_auto = false;
-
-                ESP_LOGI(TAG_PWM,"Modo: %c,Duty cycle: %d\n", modo,elementos_PWM.pwm_queue);
-            }
-            if (gpio_get_level(GPIO_INPUT_IO_2)){   //23
-                gpio_set_level(GPIO_OUTPUT_IO_0,!estado);
-
-                if(!elementos_PWM.mode_auto){
-                    ++elementos_PWM.pwm_queue;
-                }
+                    elementos_PWM.mode_auto = false;
+                    elementos_PWM.pwm_queue = 0;
+                    ESP_LOGI(TAG_PWM,"Modo: %c,Duty cycle: %d\n", modo,elementos_PWM.pwm_queue);
+                    break;
                 
-                ESP_LOGI(TAG_PWM,"Modo: %c, Duty cycle: %d\n", modo, elementos_PWM.pwm_queue);
+                case 23: //23
+                    gpio_set_level(GPIO_OUTPUT_IO_0,1);
+
+                    if(!elementos_PWM.mode_auto){
+                        elementos_PWM.pwm_queue = elementos_PWM.pwm_queue + 250;
+                        if(elementos_PWM.pwm_queue==4095*2){
+                           elementos_PWM.pwm_queue=0; 
+                        }
+                    }
+                    
+                    //ESP_LOGI(TAG_PWM,"Modo: %c, Duty cycle: %d\n", modo, elementos_PWM.pwm_queue);
+                    break;
             }
             //printf("GPIO[%"PRIu32"] intr, val: %d\n", io_num, gpio_get_level(io_num));
-            ESP_LOGI(TAG_BOT_LED_02,"GPIO[%"PRIu32"] intr, val: %d\n", io_num, gpio_get_level(io_num)); //Printando os dados do pino e o nível lógico associado
+            //ESP_LOGI(TAG_BOT_LED_02,"GPIO[%"PRIu32"] intr, val: %d\n", io_num, gpio_get_level(io_num)); //Printando os dados do pino e o nível lógico associado
             //Mandar dados para a fila do PWM
             xQueueSendFromISR(queue_pwm, &elementos_PWM, NULL);           
             vTaskDelay(10);
@@ -187,7 +190,6 @@ static void timer_task(void* arg) //Tarefa associada ao timer
                 cemms = 0;
                 ESP_LOGI(TAG_TIMER,"%d:%d:%d; Timer = %llu; Alarm = %llu\n", hora, minuto, segundo, element.event_count, element.alarm_count);
             }
-
             xSemaphoreGive(semaphore_pwm);//Semaforo para PWM
         }
     }
@@ -235,6 +237,7 @@ static void example_PWMledc_init(void)
 }
 
 PWM_elements_t elementos_PWM_r; //Elemento de recebimento da fila do PWM
+
 int i = 0;
 
 //Task propriamente dita
@@ -243,23 +246,22 @@ static void PWM_task(void* arg) //Tarefa associada ao PWM
 
     // Set the LEDC peripheral configuration
     example_PWMledc_init();
-    
-    // Update duty to apply the new value
-    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
 
     while(1){
         if(xSemaphoreTake(semaphore_pwm, portMAX_DELAY)){
-            xQueueReceive(queue_pwm, &elementos_PWM_r, 1000);//Recebendo elementos da fila do PWM
+            xQueueReceive(queue_pwm, &elementos_PWM_r, portMAX_DELAY);//Recebendo elementos da fila do PWM
             // Set duty
             if(elementos_PWM_r.mode_auto){
-                if(i==2*4095){
-                    i = 0;
+                for(i=0;i<4095*2;i=i+10){      
+                    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, i)); 
+                    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+                    ESP_LOGI(TAG_PWM,"Modo: %c,Duty cycle: %d\n", 'A',i);
                 }
-                i = i + 4095;      
-
-                ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, i));  
             }else{
-                ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, ((2*4095)*(elementos_PWM_r.pwm_queue/100))));
+                i=0;
+                ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL,elementos_PWM_r.pwm_queue));
+                ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+                ESP_LOGI(TAG_PWM,"Modo: %c,Duty cycle: %d\n", 'M',elementos_PWM_r.pwm_queue);
             }
         }
     }
