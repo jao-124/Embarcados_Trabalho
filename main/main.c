@@ -27,7 +27,7 @@
 */
 #define GPIO_OUTPUT_IO_0 2
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_IO_0)) //Vetor dos pinos de saída
-
+#define portTICK_RATE_MS 1
 /*----------------------->DEFINIÇÃO DAS PORTAS DE ENTRADA<------------------------------*/
 /*#define GPIO_INPUT_IO_0     CONFIG_GPIO_INPUT_0     GPIO_INPUT_IO_0 = 0000000000000000000000000000000000010000
 #define GPIO_INPUT_IO_1     CONFIG_GPIO_INPUT_1     GPIO_INPUT_IO_1 = 0000000000000000000000000000000000100000
@@ -41,10 +41,10 @@
 /*---------->-VARIÁVEIS GLOBAIS COM OS ATRIBUTOS DE CONFIGURAÇÃO DO PWM<---------------*/
 #define LEDC_TIMER              LEDC_TIMER_0
 #define LEDC_MODE               LEDC_LOW_SPEED_MODE
-#define LEDC_OUTPUT_IO          (16) // Define the output GPIO 16 LED
-#define PWM_OUTPUT_IO           (32) // Define the output PWM
+#define LEDC_OUTPUT_IO          (16) // Define the output GPIO 16 (VERDE) LED (17 - AZUL)
+#define PWM_OUTPUT_IO           (32) // Define the output PWM (PODE SER 32 OU 33)
 #define LEDC_CHANNEL            LEDC_CHANNEL_0 //Configuração do canal do LED
-#define PWM_CHANNEL             LEDC_CHANNEL_1 //Configuração do canal do LED
+#define PWM_CHANNEL             LEDC_CHANNEL_1 //Configuração do canal do PWM
 #define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
 #define LEDC_DUTY               (4095) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
 #define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
@@ -137,9 +137,12 @@ static void gpio_task_button(void* arg) //Tarefa associada aos botões
 
                     if(!elementos_PWM.mode_auto){
                         elementos_PWM.pwm_queue = elementos_PWM.pwm_queue + 250;
+
                         if(elementos_PWM.pwm_queue >= 4095*2){
                            elementos_PWM.pwm_queue=0; 
                         }
+
+                        ESP_LOGI(TAG_PWM,"Modo: %c,\tDuty cycle: %d\n", 'M',elementos_PWM.pwm_queue);
                     }
                     
                     //ESP_LOGI(TAG_PWM,"Modo: %c, Duty cycle: %d\n", modo, elementos_PWM.pwm_queue);
@@ -149,7 +152,7 @@ static void gpio_task_button(void* arg) //Tarefa associada aos botões
             //ESP_LOGI(TAG_BOT_LED_02,"GPIO[%"PRIu32"] intr, val: %d\n", io_num, gpio_get_level(io_num)); //Printando os dados do pino e o nível lógico associado
             //Mandar dados para a fila do PWM
             xQueueSendFromISR(queue_pwm, &elementos_PWM, NULL);           
-            vTaskDelay(10);
+            vTaskDelay(10/portTICK_RATE_MS);
         }
     }
 }
@@ -249,34 +252,34 @@ static void PWM_task(void* arg) //Tarefa associada ao PWM
 
     while(1){
         if(xSemaphoreTake(semaphore_pwm, portMAX_DELAY)){
-            xQueueReceive(queue_pwm, &elementos_PWM_r, portMAX_DELAY);//Recebendo elementos da fila do PWM
-            // Set duty
-            if(elementos_PWM_r.mode_auto){
-                for(i=0;i<4095*2;i=i+10){      
-                    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, i)); 
-                    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
-
-                    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, PWM_CHANNEL, i)); 
+           if(xQueueReceive(queue_pwm, &elementos_PWM_r, 10/portTICK_RATE_MS)){ 
+                i = 0;
+            }
+            switch (elementos_PWM_r.mode_auto){
+                case true:
+                    
+                    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, PWM_CHANNEL,i));
                     ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, PWM_CHANNEL));
 
-                    ESP_LOGI(TAG_PWM,"Modo: %c,Duty cycle: %d\n", 'A',i);
-                }
-                ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, 0)); 
-                ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+                    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL,i));
+                    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
 
-                ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, PWM_CHANNEL, 0)); 
-                ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, PWM_CHANNEL));
+                    if(i >= 4095*2){
+                           i = 0; 
+                    }
+                    i = i + 100;
+                    ESP_LOGI(TAG_PWM,"Modo: %c,\tDuty cycle: %d\n", 'A',i);
+                    break;
 
-            }else{
-                i=0;
-                ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL,elementos_PWM_r.pwm_queue));
-                ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+                case false:
+                    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, PWM_CHANNEL,elementos_PWM_r.pwm_queue));
+                    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, PWM_CHANNEL));
 
-                ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, PWM_CHANNEL,elementos_PWM_r.pwm_queue));
-                ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, PWM_CHANNEL));
+                    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL,elementos_PWM_r.pwm_queue));
+                    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
 
-                ESP_LOGI(TAG_PWM,"Modo: %c,Duty cycle: %d\n", 'M',elementos_PWM_r.pwm_queue);
-            }
+                    break;
+            }     
         }
     }
 }
