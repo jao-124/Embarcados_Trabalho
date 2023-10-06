@@ -27,7 +27,7 @@
 */
 #define GPIO_OUTPUT_IO_0 2
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_IO_0)) //Vetor dos pinos de saída
-#define portTICK_RATE_MS 1
+
 /*----------------------->DEFINIÇÃO DAS PORTAS DE ENTRADA<------------------------------*/
 /*#define GPIO_INPUT_IO_0     CONFIG_GPIO_INPUT_0     GPIO_INPUT_IO_0 = 0000000000000000000000000000000000010000
 #define GPIO_INPUT_IO_1     CONFIG_GPIO_INPUT_1     GPIO_INPUT_IO_1 = 0000000000000000000000000000000000100000
@@ -152,7 +152,7 @@ static void gpio_task_button(void* arg) //Tarefa associada aos botões
             //ESP_LOGI(TAG_BOT_LED_02,"GPIO[%"PRIu32"] intr, val: %d\n", io_num, gpio_get_level(io_num)); //Printando os dados do pino e o nível lógico associado
             //Mandar dados para a fila do PWM
             xQueueSendFromISR(queue_pwm, &elementos_PWM, NULL);           
-            vTaskDelay(10/portTICK_RATE_MS);
+            vTaskDelay(10/portTICK_PERIOD_MS);
         }
     }
 }
@@ -252,7 +252,7 @@ static void PWM_task(void* arg) //Tarefa associada ao PWM
 
     while(1){
         if(xSemaphoreTake(semaphore_pwm, portMAX_DELAY)){
-           if(xQueueReceive(queue_pwm, &elementos_PWM_r, 10/portTICK_RATE_MS)){ 
+           if(xQueueReceive(queue_pwm, &elementos_PWM_r, 10/portTICK_PERIOD_MS)){ 
                 i = 0;
             }
             switch (elementos_PWM_r.mode_auto){
