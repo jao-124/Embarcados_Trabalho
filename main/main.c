@@ -137,7 +137,7 @@ static void gpio_task_button(void* arg) //Tarefa associada aos botões
 
                     if(!elementos_PWM.mode_auto){
                         elementos_PWM.pwm_queue = elementos_PWM.pwm_queue + 250;
-                        if(elementos_PWM.pwm_queue==4095*2){
+                        if(elementos_PWM.pwm_queue >= 4095*2){
                            elementos_PWM.pwm_queue=0; 
                         }
                     }
@@ -255,12 +255,26 @@ static void PWM_task(void* arg) //Tarefa associada ao PWM
                 for(i=0;i<4095*2;i=i+10){      
                     ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, i)); 
                     ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+
+                    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, PWM_CHANNEL, i)); 
+                    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, PWM_CHANNEL));
+
                     ESP_LOGI(TAG_PWM,"Modo: %c,Duty cycle: %d\n", 'A',i);
                 }
+                ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, 0)); 
+                ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+
+                ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, PWM_CHANNEL, 0)); 
+                ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, PWM_CHANNEL));
+
             }else{
                 i=0;
                 ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL,elementos_PWM_r.pwm_queue));
                 ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+
+                ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, PWM_CHANNEL,elementos_PWM_r.pwm_queue));
+                ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, PWM_CHANNEL));
+
                 ESP_LOGI(TAG_PWM,"Modo: %c,Duty cycle: %d\n", 'M',elementos_PWM_r.pwm_queue);
             }
         }
