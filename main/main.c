@@ -14,7 +14,10 @@
 #include "driver/ledc.h"
 #include "esp_err.h"
 #include "freertos/semphr.h"
-
+#include "soc/soc_caps.h"
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
 
 /****************************************************************************************/
 /*---------------------------------->VARIÁVEIS GLOBAIS<---------------------------------*/
@@ -42,13 +45,24 @@
 #define LEDC_TIMER              LEDC_TIMER_0
 #define LEDC_MODE               LEDC_LOW_SPEED_MODE
 #define LEDC_OUTPUT_IO          (16) // Define the output GPIO 16 (VERDE) LED (17 - AZUL)
-#define PWM_OUTPUT_IO           (32) // Define the output PWM (PODE SER 32 OU 33)
+#define PWM_OUTPUT_IO           (33) // Define the output PWM (PODE SER 32 OU 33)
 #define LEDC_CHANNEL            LEDC_CHANNEL_0 //Configuração do canal do LED
 #define PWM_CHANNEL             LEDC_CHANNEL_1 //Configuração do canal do PWM
 #define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
 #define LEDC_DUTY               (4095) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
 #define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
 
+/*---------->-VARIÁVEIS GLOBAIS COM OS ATRIBUTOS DE CONFIGURAÇÃO DO ADC<---------------*/
+//Definição de qual ADC utilizar e do canal correspondente
+#if CONFIG_IDF_TARGET_ESP32
+    #define EXAMPLE_ADC1_CHAN0          ADC_CHANNEL_3
+#endif
+
+#define EXAMPLE_ADC_ATTEN           ADC_ATTEN_DB_11
+static int adc_raw[2][10];
+static int adc_voltage[2][10];
+static bool example_adc_calibration_init(adc_unit_t unit, adc_atten_t atten, adc_cali_handle_t *out_handle);
+static void example_adc_calibration_deinit(adc_cali_handle_t handle);
 
 /****************************************************************************************/
 /*-------------------------->CRIAÇÃO DA FLAG DE INTERRUPÇÃO<---------------------------*/
@@ -59,9 +73,10 @@
 /*-------------------------------->DECLARANDO AS TAGS<----------------------------------*/
 /****************************************************************************************/
 static const char* TAG_INFO_SYS_01 = "DADOS_SISTEMA";
-static const char* TAG_BOT_LED_02 = "BOT_LED";
+//static const char* TAG_BOT_LED_02 = "BOT_LED";
 static const char* TAG_TIMER = "TIMER";
 static const char* TAG_PWM = "PWM";
+static const char* TAG_ADC = "ADC";
 
 /****************************************************************************************/
 /*---------------------------------->DECLARANDO A FILA<---------------------------------*/
@@ -69,6 +84,12 @@ static const char* TAG_PWM = "PWM";
 static QueueHandle_t gpio_evt_queue = NULL; // do IO
 static QueueHandle_t queue_timer = NULL; //do Timer
 static QueueHandle_t queue_pwm   = NULL; //do PWM
+static QueueHandle_t queue_adc   = NULL; //do ADC
+
+
+/****************************************************************************************/
+/*------------------------------->STRUCTS DE PARÂMETRO<---------------------------------*/
+/****************************************************************************************/
 
 //Struct para passagem de parâmetros do TIMER para a fila
 typedef struct { 
@@ -76,18 +97,31 @@ typedef struct {
     uint64_t alarm_count;
 } queue_element_TIMER;
 
-//Handle do TIMER
-gptimer_handle_t gptimer = NULL; //Desclaração do handle 
-
-//Handle PWM
+//Struct para passagem de parâmetros do PWM para a fila
 typedef struct { 
     bool mode_auto;
     int16_t pwm_queue;
 } PWM_elements_t;
 
+//Struct para passagem de parâmetros do ADC para a fila
+typedef struct { 
+    int valor_raw;
+    int valor_volt;
+} ADC_elements_t;
 
-//Handle do semaforo
-static SemaphoreHandle_t semaphore_pwm = NULL;// Semaforo
+/****************************************************************************************/
+/*--------------------------------------->HANDLES<--------------------------------------*/
+/****************************************************************************************/
+
+//Handle do TIMER
+gptimer_handle_t gptimer = NULL; //Desclaração do handle do timer
+
+//Handle do ADC
+adc_oneshot_unit_handle_t adc1_handle;
+
+//Handle dos semaforos
+static SemaphoreHandle_t semaphore_pwm = NULL;// Semaforo do PWM
+static SemaphoreHandle_t semaphore_adc = NULL;// Semaforo do ADC
 
 /****************************************************************************************/
 /*-------------------------->ESTRUTURAS E ROTINAS DAS TASKS<----------------------------*/
@@ -162,6 +196,9 @@ int hora = 0, minuto = 0, segundo = 0, cemms = 0;
 
 queue_element_TIMER element; //Parâmetro da fila, declarado com tipo igual à struct criada
 
+//Elemento para recebimento de dados do ADC
+ADC_elements_t elementos_ADC_r;
+
 //Task propriamente dita
 static void timer_task(void* arg) //Tarefa associada ao timer
 {
@@ -192,9 +229,14 @@ static void timer_task(void* arg) //Tarefa associada ao timer
                 segundo ++; //10x 
                 cemms = 0;
                 ESP_LOGI(TAG_TIMER,"%d:%d:%d; Timer = %llu; Alarm = %llu\n", hora, minuto, segundo, element.event_count, element.alarm_count);
+                    if(xQueueReceive(queue_adc, &elementos_ADC_r, (10/portTICK_PERIOD_MS)))
+                    {
+                        ESP_LOGI(TAG_ADC,"Valor em bits: %d | Valor em Volts: %d\n",elementos_ADC_r.valor_raw,elementos_ADC_r.valor_volt);
+                    }
             }
             xSemaphoreGive(semaphore_pwm);//Semaforo para PWM
-        }
+            xSemaphoreGive(semaphore_adc);//Semaforo para ADC
+        }   
     }
 }
 
@@ -281,6 +323,50 @@ static void PWM_task(void* arg) //Tarefa associada ao PWM
                     break;
             }     
         }
+    }
+}
+
+/*-------------------------------->TASK DO ADC<-----------------------------------------*/
+//Task propriamente dita
+static void ADC_task(void* arg) //Tarefa associada ao ADC
+{
+    //Elemento para passagem de dados
+    ADC_elements_t elementos_ADC;
+
+    //Inicialização do ADC
+    adc_oneshot_unit_init_cfg_t init_config1 = {
+        .unit_id = ADC_UNIT_1,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));//"set" da inicialização
+
+    //Configuração do ADC
+    adc_oneshot_chan_cfg_t config = {
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+        .atten = EXAMPLE_ADC_ATTEN,
+    };
+        ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN0, &config));//Carregando a configuração
+
+    //Calibração inicial do ADC
+    adc_cali_handle_t adc1_cali_handle = NULL;
+    bool do_calibration1 = example_adc_calibration_init(ADC_UNIT_1, EXAMPLE_ADC_ATTEN, &adc1_cali_handle);    
+    
+    while (1)
+    {
+        if(xSemaphoreTake(semaphore_adc, portMAX_DELAY)){
+            //Leitura do ADC
+            ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw[0][0]));
+            elementos_ADC.valor_raw = adc_raw[0][0];
+            //printf("RAW: %i\n", adc_raw[0][0]);
+
+            //Calibração -> Valor na unidade desejada
+            if (do_calibration1) {
+                ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, adc_raw[0][0], &adc_voltage[0][0]));
+                elementos_ADC.valor_volt = adc_voltage[0][0];
+                //printf("ADC: %i\n", adc_voltage[0][0]);
+            }
+        }
+            //Encaminhando dados para a fila do ADC
+            xQueueSendToBack(queue_adc, &elementos_ADC, NULL);  
     }
 }
 
@@ -437,6 +523,14 @@ void app_main(void)
         return;
     }
 
+    
+    /*-------------------------------->ADC - PT5<---------------------------------*/
+    
+    //Criação da fila do ADC
+    queue_adc = xQueueCreate(10, sizeof(ADC_elements_t));
+
+    semaphore_adc = xSemaphoreCreateBinary(); // criação do semaphore binario
+
     /*LOOP DA MAIN (PODE SER ELIMINADO)*/
 
     /*----------->CRIAÇÃO DE UMA TASK ATRIBUÍDA À STRUCT CRIADA<-----------------*/
@@ -448,4 +542,58 @@ void app_main(void)
 
     //start PWM task
     xTaskCreate(PWM_task, "PWM_task", 2048, NULL, 8, NULL);
+
+    //start ADC task
+    xTaskCreate(ADC_task, "ADC_task", 2048, NULL, 7, NULL);
+}
+/*//////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------->FUNÇÃO DE CALIBRAÇÃO DO ADC<--------------------------------*/
+/*//////////////////////////////////////////////////////////////////////////////////////*/
+
+static bool example_adc_calibration_init(adc_unit_t unit, adc_atten_t atten, adc_cali_handle_t *out_handle)
+{
+    adc_cali_handle_t handle = NULL;
+    esp_err_t ret = ESP_FAIL;
+    bool calibrated = false;
+
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    if (!calibrated) {
+        ESP_LOGI(TAG, "calibration scheme version is %s", "Curve Fitting");
+        adc_cali_curve_fitting_config_t cali_config = {
+            .unit_id = unit,
+            .atten = atten,
+            .bitwidth = ADC_BITWIDTH_DEFAULT,
+        };
+        ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
+        if (ret == ESP_OK) {
+            calibrated = true;
+        }
+    }
+#endif
+
+#if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    if (!calibrated) {
+        ESP_LOGI(TAG_ADC, "calibration scheme version is %s", "Line Fitting");
+        adc_cali_line_fitting_config_t cali_config = {
+            .unit_id = unit,
+            .atten = atten,
+            .bitwidth = ADC_BITWIDTH_DEFAULT,
+        };
+        ret = adc_cali_create_scheme_line_fitting(&cali_config, &handle);
+        if (ret == ESP_OK) {
+            calibrated = true;
+        }
+    }
+#endif
+
+    *out_handle = handle;
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG_ADC, "Calibration Success");
+    } else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated) {
+        ESP_LOGW(TAG_ADC, "eFuse not burnt, skip software calibration");
+    } else {
+        ESP_LOGE(TAG_ADC, "Invalid arg or no memory");
+    }
+
+    return calibrated;
 }
