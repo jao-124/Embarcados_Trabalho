@@ -18,6 +18,9 @@
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
+#include "esp_system.h"
+#include "driver/uart.h"
+
 
 /****************************************************************************************/
 /*---------------------------------->VARIÁVEIS GLOBAIS<---------------------------------*/
@@ -64,6 +67,10 @@ static int adc_voltage[2][10];
 static bool example_adc_calibration_init(adc_unit_t unit, adc_atten_t atten, adc_cali_handle_t *out_handle);
 static void example_adc_calibration_deinit(adc_cali_handle_t handle);
 
+/*---------->-VARIÁVEIS GLOBAIS COM OS ATRIBUTOS DE CONFIGURAÇÃO DO UART<---------------*/
+#define TXD_PIN     (GPIO_NUM_5)
+#define RXD_PIN     (GPIO_NUM_4)
+
 /****************************************************************************************/
 /*-------------------------->CRIAÇÃO DA FLAG DE INTERRUPÇÃO<---------------------------*/
 /****************************************************************************************/
@@ -77,6 +84,7 @@ static const char* TAG_INFO_SYS_01 = "DADOS_SISTEMA";
 static const char* TAG_TIMER = "TIMER";
 static const char* TAG_PWM = "PWM";
 static const char* TAG_ADC = "ADC";
+static const int RX_BUF_SIZE = 1024;
 
 /****************************************************************************************/
 /*---------------------------------->DECLARANDO A FILA<---------------------------------*/
@@ -193,6 +201,7 @@ static void gpio_task_button(void* arg) //Tarefa associada aos botões
 /*------------------------------->TASK DO TIMER<----------------------------------------*/
 //Declaração de variáveis
 int hora = 0, minuto = 0, segundo = 0, cemms = 0;
+int horareal = 0, minutoreal = 0, segundoreal = 0;
 
 queue_element_TIMER element; //Parâmetro da fila, declarado com tipo igual à struct criada
 
@@ -228,7 +237,7 @@ static void timer_task(void* arg) //Tarefa associada ao timer
             if(cemms == 10){
                 segundo ++; //10x 
                 cemms = 0;
-                ESP_LOGI(TAG_TIMER,"%d:%d:%d; Timer = %llu; Alarm = %llu\n", hora, minuto, segundo, element.event_count, element.alarm_count);
+                ESP_LOGI(TAG_TIMER,"%d:%d:%d; Timer = %llu; Alarm = %llu\n", hora+horareal, minuto+minutoreal, segundo+segundoreal, element.event_count, element.alarm_count);
                     if(xQueueReceive(queue_adc, &elementos_ADC_r, (10/portTICK_PERIOD_MS)))
                     {
                         ESP_LOGI(TAG_ADC,"Valor em bits: %d | Valor em Volts: %d\n",elementos_ADC_r.valor_raw,elementos_ADC_r.valor_volt);
@@ -369,6 +378,65 @@ static void ADC_task(void* arg) //Tarefa associada ao ADC
             xQueueSendToBack(queue_adc, &elementos_ADC, NULL);  
     }
 }
+
+/*-------------------------------->TASK DO UART<-----------------------------------------*/
+void init(void) {
+    const uart_config_t uart_config = {
+        .baud_rate = 115200,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
+    // We won't use a buffer for sending data.
+    uart_driver_install(UART_NUM_1, RX_BUF_SIZE * 2, 0, 0, NULL, 0);
+    uart_param_config(UART_NUM_1, &uart_config);
+    uart_set_pin(UART_NUM_1, TXD_PIN, RXD_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+}
+
+///////////////////////////////////////////////////// TASK TX
+int sendData(const char* logName, const char* data)
+{
+    const int len = strlen(data);
+    const int txBytes = uart_write_bytes(UART_NUM_1, data, len);
+    ESP_LOGI(logName, "Wrote %d bytes", txBytes);
+    return txBytes;
+}
+
+static void tx_task(void *arg)
+{
+    static const char *TX_TASK_TAG = "TX_TASK";
+    esp_log_level_set(TX_TASK_TAG, ESP_LOG_INFO);
+    while (1) {
+        //sendData(TX_TASK_TAG, "Hello world\n");
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
+    }
+}
+
+///////////////////////////////////////////////////// TASK RX
+static void rx_task(void *arg)
+{
+    static const char *RX_TASK_TAG = "RX_TASK";
+    esp_log_level_set(RX_TASK_TAG, ESP_LOG_INFO);
+    uint8_t* data = (uint8_t*) malloc(RX_BUF_SIZE+1);
+    while (1) {
+        const int rxBytes = uart_read_bytes(UART_NUM_1, data, RX_BUF_SIZE, 1000 / portTICK_PERIOD_MS);
+        if (rxBytes > 0) {
+            data[rxBytes] = 0;
+            ESP_LOGI(RX_TASK_TAG, "[OK] - Read %d bytes: '%s'", rxBytes, data);
+            ESP_LOG_BUFFER_HEXDUMP(RX_TASK_TAG, data, rxBytes, ESP_LOG_INFO);
+
+            
+            horareal = ((data[0]-0x30)*10)+(data[1]-0x30);
+            minutoreal = ((data[2]-0x30)*10)+(data[3]-0x30);
+            segundoreal = ((data[4]-0x30)*10)+(data[5]-0x30);
+
+        }
+    }
+    free(data);
+}
+
 
 /****************************************************************************************/
 /*------------------------------------>INTERRUPÇÕES<------------------------------------*/
@@ -545,6 +613,14 @@ void app_main(void)
 
     //start ADC task
     xTaskCreate(ADC_task, "ADC_task", 2048, NULL, 7, NULL);
+
+
+    /*-------------------------------->UART - PT6<---------------------------------*/
+    init();
+    //start RX UART task
+    xTaskCreate(rx_task, "uart_rx_task", 1024*2, NULL, configMAX_PRIORITIES, NULL);
+    //start TX UART task
+    xTaskCreate(tx_task, "uart_tx_task", 1024*2, NULL, configMAX_PRIORITIES-1, NULL);
 }
 /*//////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------->FUNÇÃO DE CALIBRAÇÃO DO ADC<--------------------------------*/
