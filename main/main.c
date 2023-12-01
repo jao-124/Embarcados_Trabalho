@@ -95,16 +95,17 @@ static void example_adc_calibration_deinit(adc_cali_handle_t handle);
 #define EXAMPLE_LCD_CMD_BITS           8
 #define EXAMPLE_LCD_PARAM_BITS         8
 
-void example_lvgl_demo_ui(lv_disp_t *disp)
-{
-    lv_obj_t *scr = lv_disp_get_scr_act(disp);
-    lv_obj_t *label = lv_label_create(scr);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL_CIRCULAR); /* Circular scroll */
-    lv_label_set_text(label, "a b c d e f g h i i i i  i i i.");
-    /* Size of the screen (if you use rotation 90 or 270, please set disp->driver->ver_res) */
-    lv_obj_set_width(label, disp->driver->hor_res);
-    lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 0);
-}
+char *tempoi2c;
+char *tensaoi2c;
+
+static QueueHandle_t queue_I2C   = NULL; //queue do I2C
+
+//Struct para passagem de parâmetros do ADC e do TIMER para a fila do I2C
+typedef struct { 
+    char *valor_tensao;
+    char *valor_hora;
+} I2C_elements_t;
+
 
 static bool notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
 {
@@ -258,6 +259,9 @@ static void timer_task(void* arg) //Tarefa associada ao timer
     
     uint64_t count_timer;
 
+    //Elememento para mandar para fila
+    I2C_elements_t elementos_I2C;
+
     ESP_ERROR_CHECK(gptimer_get_raw_count(gptimer, &count_timer));
 
     for(;;) {
@@ -281,6 +285,7 @@ static void timer_task(void* arg) //Tarefa associada ao timer
                 segundo ++; //10x 
                 cemms = 0;
                 ESP_LOGI(TAG_TIMER,"%d:%d:%d; Timer = %llu; Alarm = %llu\n", hora+horareal, minuto+minutoreal, segundo+segundoreal, element.event_count, element.alarm_count);
+                  
                     if(xQueueReceive(queue_adc, &elementos_ADC_r, (10/portTICK_PERIOD_MS)))
                     {
                         ESP_LOGI(TAG_ADC,"Valor em bits: %d | Valor em Volts: %d\n",elementos_ADC_r.valor_raw,elementos_ADC_r.valor_volt);
@@ -288,6 +293,16 @@ static void timer_task(void* arg) //Tarefa associada ao timer
             }
             xSemaphoreGive(semaphore_pwm);//Semaforo para PWM
             xSemaphoreGive(semaphore_adc);//Semaforo para ADC
+
+            asprintf(&tempoi2c, "%d:%d:%d",hora+horareal, minuto+minutoreal, segundo+segundoreal);
+            elementos_I2C.valor_hora =  tempoi2c;
+
+            asprintf(&tensaoi2c, "Volts: %d",elementos_ADC_r.valor_volt);
+            elementos_I2C.valor_tensao = tensaoi2c;
+
+            //Encaminhando dados para a fila do I2C
+            xQueueSendToBack(queue_I2C, &elementos_I2C, NULL);  
+
         }   
     }
 }
@@ -418,7 +433,7 @@ static void ADC_task(void* arg) //Tarefa associada ao ADC
             }
         }
             //Encaminhando dados para a fila do ADC
-            xQueueSendToBack(queue_adc, &elementos_ADC, NULL);  
+            xQueueSendToBack(queue_adc, &elementos_ADC, NULL);
     }
 }
 
@@ -667,6 +682,9 @@ void app_main(void)
 
 
     /*-------------------------------->I2C - PT7<---------------------------------*/
+    //Criação da fila do ADC
+    queue_I2C = xQueueCreate(10, sizeof(I2C_elements_t));
+    
     ESP_LOGI(TAG_I2C, "Initialize I2C bus");
     i2c_config_t i2c_conf = {
         .mode = I2C_MODE_MASTER,
@@ -729,7 +747,26 @@ void app_main(void)
     lv_disp_set_rotation(disp, LV_DISP_ROT_NONE);
 
     ESP_LOGI(TAG_I2C, "Display LVGL Scroll Text");
-    example_lvgl_demo_ui(disp);
+
+    lv_obj_t *scr = lv_disp_get_scr_act(disp);
+    lv_obj_t *label_1 = lv_label_create(scr);
+    lv_obj_t *label_2 = lv_label_create(scr);
+
+    I2C_elements_t elementos_I2C;
+    while(1){
+        if(xQueueReceive(queue_I2C, &elementos_I2C, portMAX_DELAY)){
+            
+            //lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL_CIRCULAR); /* Circular scroll */
+            lv_label_set_text(label_1, elementos_I2C.valor_hora);
+            //lv_label_set_long_mode(label_2, LV_LABEL_LONG_SCROLL_CIRCULAR); /* Circular scroll */
+            lv_label_set_text(label_2, elementos_I2C.valor_tensao);
+            /* Size of the screen (if you use rotation 90 or 270, please set disp->driver->ver_res) */
+            //lv_obj_set_width(label, disp->driver->hor_res);
+            lv_obj_align(label_1, LV_ALIGN_TOP_MID, 0, 0);
+            lv_obj_align(label_2, LV_ALIGN_CENTER, 0, 0);
+        }
+    }
+
 }
 /*//////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------->FUNÇÃO DE CALIBRAÇÃO DO ADC<--------------------------------*/
