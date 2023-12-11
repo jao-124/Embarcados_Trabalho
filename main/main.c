@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <inttypes.h>
+#include <stddef.h>
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -20,18 +21,23 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_system.h"
 #include "driver/uart.h"
-#include <stdio.h>
-#include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "driver/i2c.h"
-#include "esp_err.h"
-#include "esp_log.h"
 #include "lvgl.h"
 #include "esp_lvgl_port.h"
 #include "esp_lcd_panel_vendor.h"
+#include "esp_wifi.h"
+#include "nvs_flash.h"
+#include "esp_event.h"
+#include "esp_netif.h"
+#include "protocol_examples_common.h"
+#include "lwip/sockets.h"
+#include "lwip/dns.h"
+#include "lwip/netdb.h"
+#include "mqtt_client.h"
 
 /****************************************************************************************/
 /*---------------------------------->VARIÁVEIS GLOBAIS<---------------------------------*/
@@ -98,6 +104,7 @@ static void example_adc_calibration_deinit(adc_cali_handle_t handle);
 char *tempoi2c;
 char *tensaoi2c;
 
+
 static QueueHandle_t queue_I2C   = NULL; //queue do I2C
 
 //Struct para passagem de parâmetros do ADC e do TIMER para a fila do I2C
@@ -114,6 +121,12 @@ static bool notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_
     return false;
 }
 
+/*------->VARIÁVEIS GLOBAIS COM OS ATRIBUTOS DE CONFIGURAÇÃO DOS PWM DO MQTT<-----------*/
+//#define LEDC_HS_TIMER          LEDC_TIMER_0
+//#define LEDC_HS_MODE           LEDC_HIGH_SPEED_MODE
+#define LEDC_HS_CH0_GPIO       16  // GPIO do primeiro canal PWM MQTT
+#define LEDC_HS_CH1_GPIO       26  // GPIO do segundo canal PWM MQTT
+
 /****************************************************************************************/
 /*-------------------------->CRIAÇÃO DA FLAG DE INTERRUPÇÃO<---------------------------*/
 /****************************************************************************************/
@@ -128,6 +141,8 @@ static const char* TAG_TIMER = "TIMER";
 static const char* TAG_PWM = "PWM";
 static const char* TAG_ADC = "ADC";
 static const char* TAG_I2C = "I2C";
+static const char* TAG_MQTT = "MQTT";
+
 static const int RX_BUF_SIZE = 1024;
 
 /****************************************************************************************/
@@ -137,7 +152,7 @@ static QueueHandle_t gpio_evt_queue = NULL; // do IO
 static QueueHandle_t queue_timer = NULL; //do Timer
 static QueueHandle_t queue_pwm   = NULL; //do PWM
 static QueueHandle_t queue_adc   = NULL; //do ADC
-
+static QueueHandle_t queue_mqtt   = NULL; //do MQTT
 
 /****************************************************************************************/
 /*------------------------------->STRUCTS DE PARÂMETRO<---------------------------------*/
@@ -160,6 +175,12 @@ typedef struct {
     int valor_raw;
     int valor_volt;
 } ADC_elements_t;
+
+//Struct para passagem de parâmetros do MQTT para a fila
+typedef struct { 
+    int duty_1;
+    int duty_2;
+} MQTT_elements_t;
 
 /****************************************************************************************/
 /*--------------------------------------->HANDLES<--------------------------------------*/
@@ -348,7 +369,40 @@ static void example_PWMledc_init(void)
 
 }
 
+/*-------------------->FUNÇÕES PARA CONFIGURAÇÃO DOS PWM DO MQTT<------------------------*/
+void ledc_pwm_init(void)
+{
+    // Configure LEDC channels
+    ledc_channel_config_t ledc_channel_0 = {
+        .channel = LEDC_CHANNEL_2,
+        .duty = 0,
+        .gpio_num = LEDC_HS_CH0_GPIO,
+        .speed_mode = LEDC_MODE,
+        .timer_sel = LEDC_TIMER
+    };
+    ledc_channel_config(&ledc_channel_0);
+
+    ledc_channel_config_t ledc_channel_1 = {
+        .channel = LEDC_CHANNEL_3,
+        .duty = 0,
+        .gpio_num = LEDC_HS_CH1_GPIO,
+        .speed_mode = LEDC_MODE,
+        .timer_sel = LEDC_TIMER
+    };
+    ledc_channel_config(&ledc_channel_1);
+}
+
+void ledc_pwm_set_duty(uint32_t duty_ch0, uint32_t duty_ch1)
+{
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_2, duty_ch0);
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_3, duty_ch1);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_2);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_3);
+}
+
+
 PWM_elements_t elementos_PWM_r; //Elemento de recebimento da fila do PWM
+MQTT_elements_t elementos_MQTT_r; //Elemento de recebimento da fila do MQTT
 
 int i = 0;
 
@@ -358,6 +412,9 @@ static void PWM_task(void* arg) //Tarefa associada ao PWM
 
     // Set the LEDC peripheral configuration
     example_PWMledc_init();
+    
+    //Carregando configurações do pwm MQTT
+    ledc_pwm_init();
 
     while(1){
         if(xSemaphoreTake(semaphore_pwm, portMAX_DELAY)){
@@ -388,10 +445,19 @@ static void PWM_task(void* arg) //Tarefa associada ao PWM
                     ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
 
                     break;
-            }     
+            }
+            /*-------------------------------->TASK DO PWM MQTT<------------------------------------*/
+            if(xQueueReceive(queue_mqtt, &elementos_MQTT_r, 10/portTICK_PERIOD_MS)){
+                //Acusando recebimento dos dados do MQTT
+                printf("%d e %d. Recebido na TASK!\n",elementos_MQTT_r.duty_1,elementos_MQTT_r.duty_2);
+                //Inserindo e atualizando duty cycles
+                ledc_pwm_set_duty(elementos_MQTT_r.duty_1,elementos_MQTT_r.duty_2);
+            }
         }
     }
 }
+
+
 
 /*-------------------------------->TASK DO ADC<-----------------------------------------*/
 //Task propriamente dita
@@ -495,7 +561,6 @@ static void rx_task(void *arg)
     free(data);
 }
 
-
 /****************************************************************************************/
 /*------------------------------------>INTERRUPÇÕES<------------------------------------*/
 /****************************************************************************************/
@@ -530,6 +595,141 @@ static bool IRAM_ATTR callback_timer_1(gptimer_handle_t timer, const gptimer_ala
     return (high_task_awoken == pdTRUE);
 }
 
+/*//////////////////////////////////////////////////////////////////////////////////////*/
+/*--------------------------------->FUNÇÕES DO MQTT<------------------------------------*/
+/*//////////////////////////////////////////////////////////////////////////////////////*/
+
+static void log_error_if_nonzero(const char *message, int error_code)
+{
+    if (error_code != 0) {
+        ESP_LOGE(TAG_MQTT, "Last error %s: 0x%x", message, error_code);
+    }
+}
+
+static void mqtt_event_handler(void *handler_args, esp_event_base_t base, uint32_t event_id, void *event_data)
+{
+    
+    MQTT_elements_t elementos_MQTT; //Elemento de passagem para a fila do MQTT
+    
+    ESP_LOGD(TAG_MQTT, "Event dispatched from event loop base=%s, event_id=%zu", base, event_id);
+    esp_mqtt_event_handle_t event = event_data;
+    esp_mqtt_client_handle_t client = event->client;
+    int msg_id;
+    switch ((esp_mqtt_event_id_t)event_id) {
+    case MQTT_EVENT_CONNECTED:
+        ESP_LOGI(TAG_MQTT, "MQTT_EVENT_CONNECTED");
+        msg_id = esp_mqtt_client_publish(client, "/topic/qos1", "data_3", 0, 1, 0);
+        ESP_LOGI(TAG_MQTT, "sent publish successful, msg_id=%d", msg_id);
+
+        msg_id = esp_mqtt_client_subscribe(client, "/topic/qos0", 0);
+        ESP_LOGI(TAG_MQTT, "sent subscribe successful, msg_id=%d", msg_id);
+
+        msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
+        ESP_LOGI(TAG_MQTT, "sent subscribe successful, msg_id=%d", msg_id);
+
+        msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
+        ESP_LOGI(TAG_MQTT, "sent unsubscribe successful, msg_id=%d", msg_id);
+        break;
+    case MQTT_EVENT_DISCONNECTED:
+        ESP_LOGI(TAG_MQTT, "MQTT_EVENT_DISCONNECTED");
+        break;
+
+    case MQTT_EVENT_SUBSCRIBED:
+        ESP_LOGI(TAG_MQTT, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
+        msg_id = esp_mqtt_client_publish(client, "/topic/qos0", "data", 0, 0, 0);
+        ESP_LOGI(TAG_MQTT, "sent publish successful, msg_id=%d", msg_id);
+        break;
+    case MQTT_EVENT_UNSUBSCRIBED:
+        ESP_LOGI(TAG_MQTT, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
+        break;
+    case MQTT_EVENT_PUBLISHED:
+        ESP_LOGI(TAG_MQTT, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+        break;
+    case MQTT_EVENT_DATA:
+        ESP_LOGI(TAG_MQTT, "MQTT_EVENT_DATA");
+        printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
+        printf("DATA=%.*s\r\n", event->data_len, event->data); /*>>>>>>>>>>>INFORMAÇÃO RECEBIDA MQTT<<<<<<<<<<<<<<<<*/
+        
+        /*
+        FORMATO DO DADO DE ENTRADA:
+        XXXX|XXXX -> (DUTY CYCLE PWM 1)|(DUTY CYCLE PWM 2)
+        EXEMPLO:
+        4095|3500
+        */    
+
+        //Variáveis para manipulação do valor transmitido via MQTT
+        char val_mqtt[9];
+        char val_mqtt_1[5] = { 0 };
+        char val_mqtt_2[5] = { 0 };
+        
+        //Transmitindo todo o valor lido para uma variável
+        sprintf(val_mqtt,"%.*s",event->data_len, event->data);
+        
+        //Separando os duty cicles em duas variáveis(Cada duty cicle tem 4 dígitos)
+        memcpy(val_mqtt_1,&val_mqtt[0],4);
+        memcpy(val_mqtt_2,&val_mqtt[5],4);
+        
+        //Casting dos valores, de string para inteiro e atribuição da struct da fila MQTT
+        elementos_MQTT.duty_1 = atoi(val_mqtt_1);
+        elementos_MQTT.duty_2 = atoi(val_mqtt_2);
+
+        //Enviando valores para a fila do MQTT
+        xQueueSendToBack(queue_mqtt, &elementos_MQTT, NULL);
+        break;
+    case MQTT_EVENT_ERROR:
+        ESP_LOGI(TAG_MQTT, "MQTT_EVENT_ERROR");
+        if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+            log_error_if_nonzero("reported from esp-tls", event->error_handle->esp_tls_last_esp_err);
+            log_error_if_nonzero("reported from tls stack", event->error_handle->esp_tls_stack_err);
+            log_error_if_nonzero("captured as transport's socket errno",  event->error_handle->esp_transport_sock_errno);
+            ESP_LOGI(TAG_MQTT, "Last errno string (%s)", strerror(event->error_handle->esp_transport_sock_errno));
+
+        }
+        break;
+    default:
+        ESP_LOGI(TAG_MQTT, "Other event id:%d", event->event_id);
+        break;
+    }
+}
+
+static void mqtt_app_start(void)
+{
+    esp_mqtt_client_config_t mqtt_cfg = {
+        .broker.address.uri = "mqtt://device_3:device_3@node02.myqtthub.com:1883",
+        .credentials.client_id = "device_3",
+    };
+#if CONFIG_BROKER_URL_FROM_STDIN
+    char line[128];
+
+    if (strcmp(mqtt_cfg.broker.address.uri, "FROM_STDIN") == 0) {
+        int count = 0;
+        printf("Please enter url of mqtt broker\n");
+        while (count < 128) {
+            int c = fgetc(stdin);
+            if (c == '\n') {
+                line[count] = '\0';
+                break;
+            } else if (c > 0 && c < 127) {
+                line[count] = c;
+                ++count;
+            }
+            vTaskDelay(10 / portTICK_PERIOD_MS);
+        }
+        mqtt_cfg.broker.address.uri = line;
+        printf("Broker url: %s\n", line);
+    } else {
+        ESP_LOGE(TAG_MQTT, "Configuration mismatch: wrong broker url");
+        abort();
+    }
+#endif /* CONFIG_BROKER_URL_FROM_STDIN */
+
+    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+    /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
+    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+    esp_mqtt_client_start(client);
+}
+
+
 /****************************************************************************************/
 /*---------------------------------------->MAIN<----------------------------------------*/
 /****************************************************************************************/
@@ -557,6 +757,33 @@ void app_main(void)
         ESP_LOGI(TAG_INFO_SYS_01,"Get flash size failed");
         return;
     }
+
+    /*-------------------------------->MQTT - PT8<-------------------------------- */
+    /*---------------------------->CRIAÇÃO DA FILA - MQTT<-------------------------*/
+    queue_mqtt = xQueueCreate(10, sizeof(MQTT_elements_t));
+    ESP_LOGI(TAG_MQTT, "[APP] Startup..");
+    ESP_LOGI(TAG_MQTT, "[APP] Free memory: %zu bytes", esp_get_free_heap_size());
+    ESP_LOGI(TAG_MQTT, "[APP] IDF version: %s", esp_get_idf_version());
+
+    esp_log_level_set("*", ESP_LOG_INFO);
+    esp_log_level_set("mqtt_client", ESP_LOG_VERBOSE);
+    esp_log_level_set("MQTT_EXAMPLE", ESP_LOG_VERBOSE);
+    esp_log_level_set("TRANSPORT_BASE", ESP_LOG_VERBOSE);
+    esp_log_level_set("esp-tls", ESP_LOG_VERBOSE);
+    esp_log_level_set("TRANSPORT", ESP_LOG_VERBOSE);
+    esp_log_level_set("outbox", ESP_LOG_VERBOSE);
+
+    ESP_ERROR_CHECK(nvs_flash_init());
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    /* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
+     * Read "Establishing Wi-Fi or Ethernet Connection" section in
+     * examples/protocols/README.md for more information about this function.
+     */
+    ESP_ERROR_CHECK(example_connect());
+
+    mqtt_app_start();   
 
     /*----------------------->*CONFIGURAÇÃO DO GPIO - PT2<-------------------------*/
     
@@ -680,8 +907,8 @@ void app_main(void)
     //start TX UART task
     xTaskCreate(tx_task, "uart_tx_task", 1024*2, NULL, configMAX_PRIORITIES-1, NULL);
 
-
-    /*-------------------------------->I2C - PT7<---------------------------------*/
+    
+    /*-------------------------------->I2C - PT7<--------------------------------- */
     //Criação da fila do ADC
     queue_I2C = xQueueCreate(10, sizeof(I2C_elements_t));
     
@@ -737,13 +964,12 @@ void app_main(void)
         }
     };
     lv_disp_t * disp = lvgl_port_add_disp(&disp_cfg);
-    /* Register done callback for IO */
+
     const esp_lcd_panel_io_callbacks_t cbs1 = {
         .on_color_trans_done = notify_lvgl_flush_ready,
     };
     esp_lcd_panel_io_register_event_callbacks(io_handle, &cbs1, disp);
 
-    /* Rotation of the screen */
     lv_disp_set_rotation(disp, LV_DISP_ROT_NONE);
 
     ESP_LOGI(TAG_I2C, "Display LVGL Scroll Text");
@@ -756,16 +982,17 @@ void app_main(void)
     while(1){
         if(xQueueReceive(queue_I2C, &elementos_I2C, portMAX_DELAY)){
             
-            //lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL_CIRCULAR); /* Circular scroll */
+
             lv_label_set_text(label_1, elementos_I2C.valor_hora);
-            //lv_label_set_long_mode(label_2, LV_LABEL_LONG_SCROLL_CIRCULAR); /* Circular scroll */
+
             lv_label_set_text(label_2, elementos_I2C.valor_tensao);
-            /* Size of the screen (if you use rotation 90 or 270, please set disp->driver->ver_res) */
+
             //lv_obj_set_width(label, disp->driver->hor_res);
             lv_obj_align(label_1, LV_ALIGN_TOP_MID, 0, 0);
             lv_obj_align(label_2, LV_ALIGN_CENTER, 0, 0);
         }
     }
+
 
 }
 /*//////////////////////////////////////////////////////////////////////////////////////*/
