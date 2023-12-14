@@ -7,11 +7,26 @@
    CONDITIONS OF ANY KIND, either express or implied.
 */
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "driver/ledc.h"
 #include "esp_err.h"
+
+#include "esp_timer.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_panel_ops.h"
+#include "driver/i2c.h"
+#include "esp_err.h"
+#include "esp_log.h"
+#include "lvgl.h"
+#include "esp_lvgl_port.h"
+
+#include "esp_lcd_sh1107.h"
+#include "esp_lcd_panel_vendor.h"
 
 /*
  * About this example
@@ -55,7 +70,7 @@
 
 */
 
-//Primeiramente são definidas as constantes e variaveis globais
+//DEFINIÇÕES RELATIVAS AO LED ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #define LEDC_HS_CH0_GPIO       (17)                 // VERMELHO
 #define LEDC_HS_CH0_CHANNEL    LEDC_CHANNEL_0       //
 
@@ -75,7 +90,34 @@
 #define LEDC_TEST_DUTY         (4000)
 #define LEDC_TEST_FADE_TIME    (5000)
 
-//Callback que será chamado quando a operação de "fade" terminar
+int dci[3] = {0, 0, 0};
+float var_temp;
+
+//DEFINIÇÕES RELATIVAS AO I2C ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+static const char* TAG_I2C = "I2C";                   //TAG do I2C
+
+#define I2C_HOST  0
+#define EXAMPLE_LCD_PIXEL_CLOCK_HZ    (400 * 1000)
+#define EXAMPLE_PIN_NUM_SDA             19            //ajustado de acordo com o módulo
+#define EXAMPLE_PIN_NUM_SCL             18            //ajustado de acordo com o módulo
+#define EXAMPLE_PIN_NUM_RST            -1
+#define EXAMPLE_I2C_HW_ADDR           0x3C
+#define EXAMPLE_LCD_H_RES               128
+#define EXAMPLE_LCD_V_RES               64
+
+#define EXAMPLE_LCD_CMD_BITS           8
+#define EXAMPLE_LCD_PARAM_BITS         8
+
+char *varFADE;
+
+static bool notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
+{
+    lv_disp_t * disp = (lv_disp_t *)user_ctx;
+    lvgl_port_flush_ready(disp);
+    return false;
+}
+
+//Callback que será chamado quando a operação de "fade" do LED terminar
 static IRAM_ATTR bool cb_ledc_fade_end_event(const ledc_cb_param_t *param, void *user_arg)
 {
     portBASE_TYPE taskAwoken = pdFALSE;
@@ -88,8 +130,88 @@ static IRAM_ATTR bool cb_ledc_fade_end_event(const ledc_cb_param_t *param, void 
     return (taskAwoken == pdTRUE);
 }
 
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void app_main(void)
 {
+    
+    // PREDEFINIÇÕES DO I2C /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    ESP_LOGI(TAG_I2C, "Initialize I2C bus");
+    i2c_config_t i2c_conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = EXAMPLE_PIN_NUM_SDA,
+        .scl_io_num = EXAMPLE_PIN_NUM_SCL,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = EXAMPLE_LCD_PIXEL_CLOCK_HZ,
+    };
+    ESP_ERROR_CHECK(i2c_param_config(I2C_HOST, &i2c_conf));
+    ESP_ERROR_CHECK(i2c_driver_install(I2C_HOST, I2C_MODE_MASTER, 0, 0, 0));
+    
+    ESP_LOGI(TAG_I2C, "Install panel IO");
+    esp_lcd_panel_io_handle_t io_handle = NULL;
+    esp_lcd_panel_io_i2c_config_t io_config = {
+        .dev_addr = EXAMPLE_I2C_HW_ADDR,
+        .control_phase_bytes = 1,               // According to SSD1306 datasheet
+        .lcd_cmd_bits = EXAMPLE_LCD_CMD_BITS,   // According to SSD1306 datasheet
+        .lcd_param_bits = EXAMPLE_LCD_CMD_BITS, // According to SSD1306 datasheet
+        .dc_bit_offset = 6,                     // LCD CONTROLLER SSD1306
+    };
+
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c((esp_lcd_i2c_bus_handle_t)I2C_HOST, &io_config, &io_handle));
+
+    ESP_LOGI(TAG_I2C, "Install SSD1306 panel driver");
+    esp_lcd_panel_handle_t panel_handle = NULL;
+    esp_lcd_panel_dev_config_t panel_config = {
+        .bits_per_pixel = 1,
+        .reset_gpio_num = EXAMPLE_PIN_NUM_RST,
+    };
+
+    ESP_ERROR_CHECK(esp_lcd_new_panel_ssd1306(io_handle, &panel_config, &panel_handle)); // LCD CONTROLLER SSD1306
+
+    ESP_LOGI(TAG_I2C, "Initialize LVGL");
+    const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+    lvgl_port_init(&lvgl_cfg);
+
+    const lvgl_port_display_cfg_t disp_cfg = {
+        .io_handle = io_handle,
+        .panel_handle = panel_handle,
+        .buffer_size = EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES,
+        .double_buffer = true,
+        .hres = EXAMPLE_LCD_H_RES,
+        .vres = EXAMPLE_LCD_V_RES,
+        .monochrome = true,
+        .rotation = {
+            .swap_xy = false,
+            .mirror_x = false,
+            .mirror_y = false,
+        }
+    };
+    lv_disp_t * disp = lvgl_port_add_disp(&disp_cfg);
+
+    const esp_lcd_panel_io_callbacks_t cbs1 = {
+        .on_color_trans_done = notify_lvgl_flush_ready,
+    };
+    esp_lcd_panel_io_register_event_callbacks(io_handle, &cbs1, disp);
+
+    lv_disp_set_rotation(disp, LV_DISP_ROT_NONE);
+
+    ESP_LOGI(TAG_I2C, "Display LVGL Scroll Text");
+
+    lv_obj_t *scr = lv_disp_get_scr_act(disp);
+
+    lv_obj_t *label_LED0 = lv_label_create(scr);
+    lv_label_set_text(label_LED0, "LED 0: 0.00%%");
+    lv_obj_align(label_LED0, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    lv_obj_t *label_LED1 = lv_label_create(scr);
+    lv_label_set_text(label_LED1, "LED 1: 0.00%%");
+    lv_obj_align(label_LED1, LV_ALIGN_LEFT_MID, 0, 0);
+
+    lv_obj_t *label_LED2 = lv_label_create(scr);
+    lv_label_set_text(label_LED2, "LED 2: 0.00%%");
+    lv_obj_align(label_LED2, LV_ALIGN_BOTTOM_LEFT, 0, 0);           
+
+    // LED FADE /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     int ch;
 
     //Preparação e definição das configurações do timer que será utilizado para controle do LED
@@ -124,7 +246,7 @@ void app_main(void)
             .speed_mode = LEDC_HS_MODE,
             .hpoint     = 0,
             .timer_sel  = LEDC_HS_TIMER,
-            .flags.output_invert = 0
+            .flags.output_invert = 0,
         },
         {
             .channel    = LEDC_HS_CH1_CHANNEL,
@@ -175,16 +297,39 @@ void app_main(void)
                              ledc_channel[ch].channel, 
                              LEDC_FADE_NO_WAIT);
             
-            int dci = 0; //Variável para armazenar o duty cicle instantâneo de descida (0 para entrar no while)
+            dci[ch] = 0; //Variável para armazenar o duty cicle instantâneo de descida (0 para entrar no while)
             
-            while (dci < LEDC_TEST_DUTY){
+            while (dci[ch] < LEDC_TEST_DUTY){
                 //Atribuindo o valor instantâneo do duty cicle à variável criada
-                dci = ledc_get_duty(LEDC_HS_MODE, ledc_channel[ch].channel);
-                printf("Duty cicle instantâneo do LED %d: %.2f%%\n", ch, 100*(dci/4095.0));
-                vTaskDelay(pdMS_TO_TICKS(200));
-            }
+                dci[ch] = ledc_get_duty(LEDC_HS_MODE, ledc_channel[ch].channel);
 
-            //vTaskDelay(pdMS_TO_TICKS(500));
+                var_temp = 100*(dci[ch]/4095.0);
+                
+                printf("Duty cicle instantâneo do LED %d: %.2f%%\n", ch, var_temp);
+                
+                asprintf(&varFADE, "LED %d: %.2f%%", ch, var_temp);
+                switch (ch)
+                    {
+                    case 0:
+                        lv_label_set_text(label_LED0, varFADE);
+                    break;
+
+                    case 1:
+                        lv_label_set_text(label_LED1, varFADE);
+                    break;
+
+                    case 2:
+                        lv_label_set_text(label_LED2, varFADE);
+                    break;
+                }
+
+                lv_obj_align(label_LED0, LV_ALIGN_TOP_LEFT, 0, 0);
+                lv_obj_align(label_LED1, LV_ALIGN_LEFT_MID, 0, 0);
+                lv_obj_align(label_LED2, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));
         }
 
         for (int i = 0; i < LEDC_TEST_CH_NUM; i++) {
@@ -202,16 +347,40 @@ void app_main(void)
                              ledc_channel[ch].channel, 
                              LEDC_FADE_NO_WAIT);
             
-            int dci = 1; //Variável para armazenar o duty cicle instantâneo de descida (1 para entrar no while)
+            dci[ch] = 1; //Variável para armazenar o duty cicle instantâneo de descida (1 para entrar no while)
 
-            while (dci > 0){
+            while (dci[ch] > 0){
                 //Atribuindo o valor instantâneo do duty cicle à variável criada
-                dci = ledc_get_duty(LEDC_HS_MODE, ledc_channel[ch].channel);
-                printf("Duty cicle instantâneo do LED %d: %.2f%%\n", ch, 100*(dci/4095.0));
-                vTaskDelay(pdMS_TO_TICKS(200));
+                dci[ch] = ledc_get_duty(LEDC_HS_MODE, ledc_channel[ch].channel);
+
+                var_temp = 100*(dci[ch]/4095.0);
+                
+                printf("Duty cicle instantâneo do LED %d: %.2f%%\n", ch, var_temp);
+                
+                asprintf(&varFADE, "LED %d: %.2f%%", ch, var_temp);
+                switch (ch)
+                    {
+                    case 0:
+                        lv_label_set_text(label_LED0, varFADE);
+                    break;
+
+                    case 1:
+                        lv_label_set_text(label_LED1, varFADE);
+                    break;
+
+                    case 2:
+                        lv_label_set_text(label_LED2, varFADE);
+                    break;
+                }
+
+                lv_obj_align(label_LED0, LV_ALIGN_TOP_LEFT, 0, 0);
+                lv_obj_align(label_LED1, LV_ALIGN_LEFT_MID, 0, 0);
+                lv_obj_align(label_LED2, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+
+                vTaskDelay(pdMS_TO_TICKS(500));  
             } 
 
-            //vTaskDelay(pdMS_TO_TICKS(500));      
+            vTaskDelay(pdMS_TO_TICKS(500));      
         }
 
         for (int i = 0; i < LEDC_TEST_CH_NUM; i++) {
@@ -220,15 +389,14 @@ void app_main(void)
 
         vTaskDelay(1000 / portTICK_PERIOD_MS);
 
-/*
+        /*
         //UTILIZADO PARA VARIAÇÃO INSTANTÂNEA, TALVEZ POSSA SER IMPLEMENTADO
         printf("4. LEDC set duty = 0 without fade\n");
         for (ch = 0; ch < LEDC_TEST_CH_NUM; ch++) {
             ledc_set_duty(ledc_channel[ch].speed_mode, ledc_channel[ch].channel, 0);
             ledc_update_duty(ledc_channel[ch].speed_mode, ledc_channel[ch].channel);   
         }
-
-*/
+        */
 
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
