@@ -175,16 +175,16 @@ void app_main(void)
                              ledc_channel[ch].channel, 
                              LEDC_FADE_NO_WAIT);
             
-            int dci = 0; //Variável global para armazenar o duty cicle instantâneo
+            int dci = 0; //Variável para armazenar o duty cicle instantâneo de descida (0 para entrar no while)
             
             while (dci < LEDC_TEST_DUTY){
                 //Atribuindo o valor instantâneo do duty cicle à variável criada
                 dci = ledc_get_duty(LEDC_HS_MODE, ledc_channel[ch].channel);
                 printf("Duty cicle instantâneo do LED %d: %.2f%%\n", ch, 100*(dci/4095.0));
-                vTaskDelay(pdMS_TO_TICKS(1000));
+                vTaskDelay(pdMS_TO_TICKS(200));
             }
 
-            vTaskDelay(pdMS_TO_TICKS(500));
+            //vTaskDelay(pdMS_TO_TICKS(500));
         }
 
         for (int i = 0; i < LEDC_TEST_CH_NUM; i++) {
@@ -202,16 +202,16 @@ void app_main(void)
                              ledc_channel[ch].channel, 
                              LEDC_FADE_NO_WAIT);
             
-            int dci = 0; //Variável global para armazenar o duty cicle instantâneo
+            int dci = 1; //Variável para armazenar o duty cicle instantâneo de descida (1 para entrar no while)
 
             while (dci > 0){
                 //Atribuindo o valor instantâneo do duty cicle à variável criada
                 dci = ledc_get_duty(LEDC_HS_MODE, ledc_channel[ch].channel);
                 printf("Duty cicle instantâneo do LED %d: %.2f%%\n", ch, 100*(dci/4095.0));
-                vTaskDelay(pdMS_TO_TICKS(1000));
+                vTaskDelay(pdMS_TO_TICKS(200));
             } 
 
-            vTaskDelay(pdMS_TO_TICKS(500));      
+            //vTaskDelay(pdMS_TO_TICKS(500));      
         }
 
         for (int i = 0; i < LEDC_TEST_CH_NUM; i++) {
