@@ -90,11 +90,6 @@
 #define LEDC_TEST_DUTY         (4000)
 #define LEDC_TEST_FADE_TIME    (5000)
 
-int cor;
-int dci[3] = {0, 0, 0};
-int duty_RGB[3] = {0, 0, 0};
-float percent_RGB[3] = {0.00, 0.00, 0.00};
-float var_temp;
 
 //DEFINIÇÕES RELATIVAS AOS BOTÕES ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #define GPIO_OUTPUT_IO_0 2
@@ -105,8 +100,6 @@ float var_temp;
 #define GPIO_INPUT_IO_1 22
 #define GPIO_INPUT_IO_2 23
 #define GPIO_INPUT_PIN_SEL  ((1ULL<<GPIO_INPUT_IO_0) | (1ULL<<GPIO_INPUT_IO_1) | (1ULL<<GPIO_INPUT_IO_2))  //Vetor dos pinos de entrada
-
-int contador = 0;
 
 //DEFINIÇÕES RELATIVAS AO I2C ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 static const char* TAG_I2C = "I2C";                   //TAG do I2C
@@ -125,8 +118,18 @@ static const char* TAG_I2C = "I2C";                   //TAG do I2C
 
 #define MAX_ITERACOES                   30
 #define DEF_ATRASO                      300
+
+int contador = 0;
+int cor;
 int temporizador;
+int dci[3] = {0, 0, 0};
+int duty_RGB[3] = {0, 0, 0};
+
+float percent_RGB[3] = {0.00, 0.00, 0.00};
+float var_temp;
+
 char *iteracoes;
+char *corTerminal;
 char *varFADE;
 char *corATUAL;
 
@@ -191,7 +194,7 @@ static void gpio_task_button(void* arg) //Tarefa associada aos botões
 
     for(;;) {
         if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
-            printf("\n\ntestetstetstetstetstestetstetststet\n\n");
+            
 
             gpio_set_level(GPIO_OUTPUT_IO_0,1);
 
@@ -483,7 +486,7 @@ void app_main(void)
         ////////////////////////////////////////////////////////////////////////////////////////////////////
         printf("\n\n\n\n2. MODO COLORS\n");
         lv_label_set_text(label_LED0, "APERTE O BOTAO");
-        lv_label_set_text(label_LED1, "PARA ESCOLHER A COR");
+        lv_label_set_text(label_LED1, "ESCOLHA A COR");
         lv_label_set_text(label_LED2, "");
         for (temporizador = MAX_ITERACOES; temporizador > 0 ; temporizador--) {
             if(xQueueReceive(queue_BOTAO,&elementos_BOTAO_r, NULL)){
@@ -574,7 +577,7 @@ void app_main(void)
                 }           
             }
 
-            asprintf(&iteracoes, "Restam: %d segundos", temporizador);
+            asprintf(&iteracoes, "Restam: %d sec", temporizador);
             lv_label_set_text(label_LED2, iteracoes);
             lv_obj_align(label_LED2, LV_ALIGN_BOTTOM_MID, 0, 0);
 
