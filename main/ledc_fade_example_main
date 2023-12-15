@@ -96,6 +96,18 @@ int duty_RGB[3] = {0, 0, 0};
 float percent_RGB[3] = {0.00, 0.00, 0.00};
 float var_temp;
 
+//DEFINIÇÕES RELATIVAS AOS BOTÕES ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#define GPIO_OUTPUT_IO_0 2
+#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_IO_0)) //Vetor dos pinos de saída
+
+/*----------------------->DEFINIÇÃO DAS PORTAS DE ENTRADA<------------------------------*/
+#define GPIO_INPUT_IO_0 21
+#define GPIO_INPUT_IO_1 22
+#define GPIO_INPUT_IO_2 23
+#define GPIO_INPUT_PIN_SEL  ((1ULL<<GPIO_INPUT_IO_0) | (1ULL<<GPIO_INPUT_IO_1) | (1ULL<<GPIO_INPUT_IO_2))  //Vetor dos pinos de entrada
+
+int contador = 0;
+
 //DEFINIÇÕES RELATIVAS AO I2C ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 static const char* TAG_I2C = "I2C";                   //TAG do I2C
 
@@ -108,11 +120,16 @@ static const char* TAG_I2C = "I2C";                   //TAG do I2C
 #define EXAMPLE_LCD_H_RES               128
 #define EXAMPLE_LCD_V_RES               64
 
-#define EXAMPLE_LCD_CMD_BITS           8
-#define EXAMPLE_LCD_PARAM_BITS         8
+#define EXAMPLE_LCD_CMD_BITS            8
+#define EXAMPLE_LCD_PARAM_BITS          8
 
+#define MAX_ITERACOES                   30
+#define DEF_ATRASO                      300
+int temporizador;
+char *iteracoes;
 char *varFADE;
 char *corATUAL;
+
 
 static bool notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
 {
@@ -134,10 +151,133 @@ static IRAM_ATTR bool cb_ledc_fade_end_event(const ledc_cb_param_t *param, void 
     return (taskAwoken == pdTRUE);
 }
 
+/****************************************************************************************/
+/*------------------------------->STRUCTS DE PARÂMETRO<---------------------------------*/
+/****************************************************************************************/
+
+//Struct para passagem de parâmetros do TIMER para a fila
+typedef struct { 
+    int valor_acresc;
+} queue_element_BOTAO;
+
+/****************************************************************************************/
+/*-------------------------->CRIAÇÃO DA FLAG DE INTERRUPÇÃO<---------------------------*/
+/****************************************************************************************/
+#define ESP_INTR_FLAG_DEFAULT 0
+
+/****************************************************************************************/
+/*---------------------------------->DECLARANDO A FILA<---------------------------------*/
+/****************************************************************************************/
+static QueueHandle_t gpio_evt_queue = NULL; // do IO
+static QueueHandle_t queue_BOTAO = NULL; // do IO
+
+
+/****************************************************************************************/
+/*-------------------------->ESTRUTURAS E ROTINAS DAS TASKS<----------------------------*/
+/****************************************************************************************/
+
+/*------------------------------->TASK DO GPIO<----------------------------------------*/
+//Declaração de variáveis
+//bool estado = false;
+
+//Task propriamente dita
+static void gpio_task_button(void* arg) //Tarefa associada aos botões
+{
+    char modo;
+
+    uint32_t io_num;
+
+    queue_element_BOTAO elementos_BOTAO; //Elemento de passagem para a fila do botão
+
+    for(;;) {
+        if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
+            printf("\n\ntestetstetstetstetstestetstetststet\n\n");
+
+            gpio_set_level(GPIO_OUTPUT_IO_0,1);
+
+            contador = contador + 1;
+
+            if (contador == 8){
+                contador = 0;
+            }
+
+            //Atribuindo o valor acrescido à variável de passagem
+            elementos_BOTAO.valor_acresc = contador;
+            }
+            //Mandando para a fila o valor acrescido
+            xQueueSendFromISR(queue_BOTAO, &elementos_BOTAO, NULL);           
+            vTaskDelay(10/portTICK_PERIOD_MS);
+        }
+}
+
+/****************************************************************************************/
+/*------------------------------------>INTERRUPÇÕES<------------------------------------*/
+/****************************************************************************************/
+
+/*--------------------------------->INTERRUPÇÃO DO GPIO<--------------------------------*/
+static void IRAM_ATTR gpio_isr_handler(void* arg)
+{
+    uint32_t gpio_num = (uint32_t) arg;
+    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
+    //Enviando endereço do pino que gerou a interrupção para a fila
+}
+
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void app_main(void)
 {
+// PREDEFINIÇÕES DO BOTÃO /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////    
+    /*------------------------------->CRIAÇÃO DA FILA<----------------------------*/
+    //create a queue to handle gpio event from isr
+    gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
+    //queue do botão
+    queue_BOTAO = xQueueCreate(10, sizeof(queue_element_BOTAO));
     
+    /*CONFIGURANDO AS SAÍDAS*/ 
+    //zero-initialize the config structure.
+    gpio_config_t io_conf = {};
+    //disable interrupt
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    //set as output mode
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    //bit mask of the pins that you want to set,e.g.GPIO18/19
+    io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
+    //disable pull-down mode
+    io_conf.pull_down_en = 0;
+    //disable pull-up mode
+    io_conf.pull_up_en = 0;
+    /*CARREGAR CONFIGURAÇÕES NOS PINOS DE SAÍDA*/
+    //configure GPIO with the given settings
+    gpio_config(&io_conf);
+
+    /*------>INTERRUPÇÃO NA BORDA DE DESCIDA PARA TODOS OS PINOS DE SAÍDA<--------*/
+    /*CONFIGURANDO AS ENTRADAS*/ 
+    //interrupt of fallen edge
+    io_conf.intr_type = GPIO_INTR_NEGEDGE; //Interrupção na boda de descida
+    //bit mask of the pins, use GPIO 0 here
+    io_conf.pin_bit_mask = GPIO_INPUT_PIN_SEL;
+    //set as input mode
+    io_conf.mode = GPIO_MODE_INPUT;
+    //enable pull-up mode
+    io_conf.pull_up_en = 1;
+    /*CARREGAR CONFIGURAÇÕES NOS PINOS DE ENTRADA*/
+    gpio_config(&io_conf);
+
+    /*---------------------->INSTALANDO A INTERRUPÇÃO<--------------------------*/
+    //install gpio isr service
+    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
+
+    /*---------->ATRIBUIÇÃO DA INTERRUPÇÃO AOS PINOS DE ENTRADA<----------------*/
+    //hook isr handler for specific gpio pin
+    gpio_isr_handler_add(GPIO_INPUT_IO_0, gpio_isr_handler, (void*) GPIO_INPUT_IO_0);
+    gpio_isr_handler_add(GPIO_INPUT_IO_1, gpio_isr_handler, (void*) GPIO_INPUT_IO_1);
+    gpio_isr_handler_add(GPIO_INPUT_IO_2, gpio_isr_handler, (void*) GPIO_INPUT_IO_2);    
+
+    //Iniciando a Task
+    xTaskCreate(gpio_task_button, "gpio_task_button", 2048, NULL, 10, NULL);
+    
+    //Elemento de recebimento da fila do botão
+    queue_element_BOTAO elementos_BOTAO_r;
+
     // PREDEFINIÇÕES DO I2C /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     ESP_LOGI(TAG_I2C, "Initialize I2C bus");
     i2c_config_t i2c_conf = {
@@ -291,7 +431,7 @@ void app_main(void)
 
     while (1) {
         ///////////////////////////////////////////////////////////////////////////////////////////////////////////
-        printf("1. Fade UP to duty = %d\n", LEDC_TEST_DUTY);
+        printf("1. Fade IN para duty maximo = %d\n", LEDC_TEST_DUTY);
         for (ch = 0; ch < LEDC_TEST_CH_NUM; ch++) {
             ledc_set_fade_with_time( ledc_channel[ch].speed_mode,
                                      ledc_channel[ch].channel, 
@@ -332,106 +472,120 @@ void app_main(void)
                 lv_obj_align(label_LED1, LV_ALIGN_LEFT_MID, 0, 0);
                 lv_obj_align(label_LED2, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
-                vTaskDelay(pdMS_TO_TICKS(500));
+                vTaskDelay(pdMS_TO_TICKS(DEF_ATRASO));
             }
-            vTaskDelay(pdMS_TO_TICKS(500));
+            vTaskDelay(pdMS_TO_TICKS(DEF_ATRASO));
         }
 
         for (int i = 0; i < LEDC_TEST_CH_NUM; i++) {
             xSemaphoreTake(counting_sem, portMAX_DELAY);
         }
         ////////////////////////////////////////////////////////////////////////////////////////////////////
-        printf("2. COLORS\n");
+        printf("\n\n\n\n2. MODO COLORS\n");
+        lv_label_set_text(label_LED0, "APERTE O BOTAO");
+        lv_label_set_text(label_LED1, "PARA ESCOLHER A COR");
         lv_label_set_text(label_LED2, "");
-        for (cor = 0; cor < 8; cor++) {
-            switch (cor)
-                {
-                case 0:
-                    //VERMELHO
-                    asprintf(&corATUAL, "VERMELHO");
-                    duty_RGB[0] = 4000;
-                    duty_RGB[1] = 0;
-                    duty_RGB[2] = 0;
-                break;
-                case 1:
-                    //LARANJA
-                    asprintf(&corATUAL, "LARANJA");
-                    duty_RGB[0] = 4000;
-                    duty_RGB[1] = 2250;
-                    duty_RGB[2] = 0;
-                break;
-                case 2:
-                    //AMARELO
-                    asprintf(&corATUAL, "AMARELO");
-                    duty_RGB[0] = 2000;
-                    duty_RGB[1] = 2000;
-                    duty_RGB[2] = 0;
-                break;
-                case 3:
-                    //VERDE
-                    asprintf(&corATUAL, "VERDE");
-                    duty_RGB[0] = 0;
-                    duty_RGB[1] = 4000;
-                    duty_RGB[2] = 0;
-                break;
-                case 4:
-                    //AZUL
-                    asprintf(&corATUAL, "AZUL");
-                    duty_RGB[0] = 0;
-                    duty_RGB[1] = 0;
-                    duty_RGB[2] = 4000;
-                break;
-                case 5:
-                    //ROXO
-                    asprintf(&corATUAL, "ROXO");
-                    duty_RGB[0] = 1175;
-                    duty_RGB[1] = 0;
-                    duty_RGB[2] = 2040;
-                break;
-                case 6:
-                    //LILAS
-                    asprintf(&corATUAL, "LILAS");
-                    duty_RGB[0] = 2250;
-                    duty_RGB[1] = 0;
-                    duty_RGB[2] = 4000;
-                break;
-                case 7:
-                    //BRANCO
-                    asprintf(&corATUAL, "BRANCO");
-                    duty_RGB[0] = 4000;
-                    duty_RGB[1] = 4000;
-                    duty_RGB[2] = 4000;
-                break;
-            }
-        
-        percent_RGB[0] = 100*(duty_RGB[0]/4095.0);
-        percent_RGB[1] = 100*(duty_RGB[1]/4095.0);
-        percent_RGB[2] = 100*(duty_RGB[2]/4095.0);
-
-        for (ch = 0; ch < LEDC_TEST_CH_NUM; ch++) {
-            ledc_set_fade_with_time( ledc_channel[ch].speed_mode,
-                                     ledc_channel[ch].channel, 
-                                     duty_RGB[ch], 
-                                     100);
-
-            ledc_fade_start( ledc_channel[ch].speed_mode,
-                             ledc_channel[ch].channel, 
-                             LEDC_FADE_NO_WAIT);
+        for (temporizador = MAX_ITERACOES; temporizador > 0 ; temporizador--) {
+            if(xQueueReceive(queue_BOTAO,&elementos_BOTAO_r, NULL)){
+                cor = elementos_BOTAO_r.valor_acresc;
+                switch (cor)
+                    {
+                    case 0:
+                        //VERMELHO
+                        asprintf(&corATUAL, "VERMELHO");
+                        duty_RGB[0] = 4000;
+                        duty_RGB[1] = 0;
+                        duty_RGB[2] = 0;
+                    break;
+                    case 1:
+                        //LARANJA
+                        asprintf(&corATUAL, "LARANJA");
+                        duty_RGB[0] = 4000;
+                        duty_RGB[1] = 2250;
+                        duty_RGB[2] = 0;
+                    break;
+                    case 2:
+                        //AMARELO
+                        asprintf(&corATUAL, "AMARELO");
+                        duty_RGB[0] = 2000;
+                        duty_RGB[1] = 2000;
+                        duty_RGB[2] = 0;
+                    break;
+                    case 3:
+                        //VERDE
+                        asprintf(&corATUAL, "VERDE");
+                        duty_RGB[0] = 0;
+                        duty_RGB[1] = 4000;
+                        duty_RGB[2] = 0;
+                    break;
+                    case 4:
+                        //AZUL
+                        asprintf(&corATUAL, "AZUL");
+                        duty_RGB[0] = 0;
+                        duty_RGB[1] = 0;
+                        duty_RGB[2] = 4000;
+                    break;
+                    case 5:
+                        //ROXO
+                        asprintf(&corATUAL, "ROXO");
+                        duty_RGB[0] = 1175;
+                        duty_RGB[1] = 0;
+                        duty_RGB[2] = 2040;
+                    break;
+                    case 6:
+                        //LILAS
+                        asprintf(&corATUAL, "LILAS");
+                        duty_RGB[0] = 2250;
+                        duty_RGB[1] = 0;
+                        duty_RGB[2] = 4000;
+                    break;
+                    case 7:
+                        //BRANCO
+                        asprintf(&corATUAL, "BRANCO");
+                        duty_RGB[0] = 4000;
+                        duty_RGB[1] = 4000;
+                        duty_RGB[2] = 4000;
+                    break;
+                }
             
+                percent_RGB[0] = 100*(duty_RGB[0]/4095.0);
+                percent_RGB[1] = 100*(duty_RGB[1]/4095.0);
+                percent_RGB[2] = 100*(duty_RGB[2]/4095.0);
 
-            dci[ch] = ledc_get_duty(LEDC_HS_MODE, ledc_channel[ch].channel);
-            asprintf(&varFADE, "R%.0f%% G%.0f%% B%.0f%%", percent_RGB[0] , percent_RGB[1], percent_RGB[2]);
-            lv_label_set_text(label_LED0, varFADE);
-            lv_obj_align(label_LED0, LV_ALIGN_TOP_MID, 0, 0);
-            lv_label_set_text(label_LED1, corATUAL);
-            lv_obj_align(label_LED1, LV_ALIGN_CENTER, 0, 0);
+                for (ch = 0; ch < LEDC_TEST_CH_NUM; ch++) {
+                    ledc_set_fade_with_time( ledc_channel[ch].speed_mode,
+                                            ledc_channel[ch].channel, 
+                                            duty_RGB[ch], 
+                                            100);
+
+                    ledc_fade_start( ledc_channel[ch].speed_mode,
+                                    ledc_channel[ch].channel, 
+                                    LEDC_FADE_NO_WAIT);
+                    
+
+                    dci[ch] = ledc_get_duty(LEDC_HS_MODE, ledc_channel[ch].channel);
+                    asprintf(&varFADE, "R%.0f%% G%.0f%% B%.0f%%", percent_RGB[0] , percent_RGB[1], percent_RGB[2]);
+
+                    lv_label_set_text(label_LED0, varFADE);
+                    lv_obj_align(label_LED0, LV_ALIGN_TOP_MID, 0, 0);
+                    lv_label_set_text(label_LED1, corATUAL);
+                    lv_obj_align(label_LED1, LV_ALIGN_CENTER, 0, 0);
+
+                }           
             }
-            vTaskDelay(pdMS_TO_TICKS(10000));
-        }
-        
 
+            asprintf(&iteracoes, "Restam: %d segundos", temporizador);
+            lv_label_set_text(label_LED2, iteracoes);
+            lv_obj_align(label_LED2, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        
+        }
         ///////////////////////////////////////////////////////////////////////////////////////////////////////////
-        printf("3. Fade DOWN to duty = 0\n");
+        printf("\n\n\n\n3. Fade OUT para duty = 0\n");
+        lv_label_set_text(label_LED0, "LED 0: 97.68%%");
+        lv_label_set_text(label_LED1, "LED 1: 97.68%%");
+        lv_label_set_text(label_LED2, "LED 2: 97.68%%");
         for (ch = 0; ch < LEDC_TEST_CH_NUM; ch++) {
             ledc_set_fade_with_time( ledc_channel[ch].speed_mode,
                                      ledc_channel[ch].channel, 
@@ -472,10 +626,10 @@ void app_main(void)
                 lv_obj_align(label_LED1, LV_ALIGN_LEFT_MID, 0, 0);
                 lv_obj_align(label_LED2, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
-                vTaskDelay(pdMS_TO_TICKS(500));  
+                vTaskDelay(pdMS_TO_TICKS(DEF_ATRASO));  
             } 
 
-            vTaskDelay(pdMS_TO_TICKS(500));      
+            vTaskDelay(pdMS_TO_TICKS(DEF_ATRASO));      
         }
 
         for (int i = 0; i < LEDC_TEST_CH_NUM; i++) {
