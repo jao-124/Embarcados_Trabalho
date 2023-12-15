@@ -90,7 +90,10 @@
 #define LEDC_TEST_DUTY         (4000)
 #define LEDC_TEST_FADE_TIME    (5000)
 
+int cor;
 int dci[3] = {0, 0, 0};
+int duty_RGB[3] = {0, 0, 0};
+float percent_RGB[3] = {0.00, 0.00, 0.00};
 float var_temp;
 
 //DEFINIÇÕES RELATIVAS AO I2C ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -109,6 +112,7 @@ static const char* TAG_I2C = "I2C";                   //TAG do I2C
 #define EXAMPLE_LCD_PARAM_BITS         8
 
 char *varFADE;
+char *corATUAL;
 
 static bool notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
 {
@@ -286,6 +290,7 @@ void app_main(void)
     }
 
     while (1) {
+        ///////////////////////////////////////////////////////////////////////////////////////////////////////////
         printf("1. Fade UP to duty = %d\n", LEDC_TEST_DUTY);
         for (ch = 0; ch < LEDC_TEST_CH_NUM; ch++) {
             ledc_set_fade_with_time( ledc_channel[ch].speed_mode,
@@ -335,8 +340,98 @@ void app_main(void)
         for (int i = 0; i < LEDC_TEST_CH_NUM; i++) {
             xSemaphoreTake(counting_sem, portMAX_DELAY);
         }
+        ////////////////////////////////////////////////////////////////////////////////////////////////////
+        printf("2. COLORS\n");
+        lv_label_set_text(label_LED2, "");
+        for (cor = 0; cor < 8; cor++) {
+            switch (cor)
+                {
+                case 0:
+                    //VERMELHO
+                    asprintf(&corATUAL, "VERMELHO");
+                    duty_RGB[0] = 4000;
+                    duty_RGB[1] = 0;
+                    duty_RGB[2] = 0;
+                break;
+                case 1:
+                    //LARANJA
+                    asprintf(&corATUAL, "LARANJA");
+                    duty_RGB[0] = 4000;
+                    duty_RGB[1] = 2250;
+                    duty_RGB[2] = 0;
+                break;
+                case 2:
+                    //AMARELO
+                    asprintf(&corATUAL, "AMARELO");
+                    duty_RGB[0] = 2000;
+                    duty_RGB[1] = 2000;
+                    duty_RGB[2] = 0;
+                break;
+                case 3:
+                    //VERDE
+                    asprintf(&corATUAL, "VERDE");
+                    duty_RGB[0] = 0;
+                    duty_RGB[1] = 4000;
+                    duty_RGB[2] = 0;
+                break;
+                case 4:
+                    //AZUL
+                    asprintf(&corATUAL, "AZUL");
+                    duty_RGB[0] = 0;
+                    duty_RGB[1] = 0;
+                    duty_RGB[2] = 4000;
+                break;
+                case 5:
+                    //ROXO
+                    asprintf(&corATUAL, "ROXO");
+                    duty_RGB[0] = 1175;
+                    duty_RGB[1] = 0;
+                    duty_RGB[2] = 2040;
+                break;
+                case 6:
+                    //LILAS
+                    asprintf(&corATUAL, "LILAS");
+                    duty_RGB[0] = 2250;
+                    duty_RGB[1] = 0;
+                    duty_RGB[2] = 4000;
+                break;
+                case 7:
+                    //BRANCO
+                    asprintf(&corATUAL, "BRANCO");
+                    duty_RGB[0] = 4000;
+                    duty_RGB[1] = 4000;
+                    duty_RGB[2] = 4000;
+                break;
+            }
+        
+        percent_RGB[0] = 100*(duty_RGB[0]/4095.0);
+        percent_RGB[1] = 100*(duty_RGB[1]/4095.0);
+        percent_RGB[2] = 100*(duty_RGB[2]/4095.0);
 
-        printf("2. Fade DOWN to duty = 0\n");
+        for (ch = 0; ch < LEDC_TEST_CH_NUM; ch++) {
+            ledc_set_fade_with_time( ledc_channel[ch].speed_mode,
+                                     ledc_channel[ch].channel, 
+                                     duty_RGB[ch], 
+                                     100);
+
+            ledc_fade_start( ledc_channel[ch].speed_mode,
+                             ledc_channel[ch].channel, 
+                             LEDC_FADE_NO_WAIT);
+            
+
+            dci[ch] = ledc_get_duty(LEDC_HS_MODE, ledc_channel[ch].channel);
+            asprintf(&varFADE, "R%.0f%% G%.0f%% B%.0f%%", percent_RGB[0] , percent_RGB[1], percent_RGB[2]);
+            lv_label_set_text(label_LED0, varFADE);
+            lv_obj_align(label_LED0, LV_ALIGN_TOP_MID, 0, 0);
+            lv_label_set_text(label_LED1, corATUAL);
+            lv_obj_align(label_LED1, LV_ALIGN_CENTER, 0, 0);
+            }
+            vTaskDelay(pdMS_TO_TICKS(10000));
+        }
+        
+
+        ///////////////////////////////////////////////////////////////////////////////////////////////////////////
+        printf("3. Fade DOWN to duty = 0\n");
         for (ch = 0; ch < LEDC_TEST_CH_NUM; ch++) {
             ledc_set_fade_with_time( ledc_channel[ch].speed_mode,
                                      ledc_channel[ch].channel, 
