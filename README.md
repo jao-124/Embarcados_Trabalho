@@ -6,6 +6,7 @@
 (Este arquivo de texto tem o objetivo de descrever a organização do repositório e apresentar o funcionamento do trabalho final).
 
 1 - As atividades desenvolvidas em laboratório ao longo do semestre se encontram organizadas no arquivo "main" da pasta "final final final/tcp".
+
 2 - O trabalho final, que constitui a última atividade avaliativa da disciplina, se encontra no arquivo "ledc_fade_example_main", da pasta main externa.
 
 ## Como utilizar o Trabalho
