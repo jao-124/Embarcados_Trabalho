@@ -1,35 +1,25 @@
 | Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C6 | ESP32-H2 | ESP32-S2 | ESP32-S3 |
 | ----------------- | ----- | -------- | -------- | -------- | -------- | -------- | -------- |
 
-# _Sample project_
+# _LEIA-ME_
 
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
+(Este arquivo de texto tem o objetivo de descrever a organização do repositório e apresentar o funcionamento do trabalho final).
 
-This is the simplest buildable example. The example is used by command `idf.py create-project`
-that copies the project to user specified path and set it's name. For more information follow the [docs page](https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html#start-a-new-project)
+1 - As atividades desenvolvidas em laboratório ao longo do semestre se encontram organizadas no arquivo "main" da pasta "final final final/tcp".
+2 - O trabalho final, que constitui a última atividade avaliativa da disciplina, se encontra no arquivo "ledc_fade_example_main", da pasta main externa.
 
+## Como utilizar o Trabalho
 
+Para que o código seja compilado e executado com sucesso, necessita-se a disponibilidade dos seguintes componentes:
 
-## How to use example
-We encourage the users to use the example as a template for the new projects.
-A recommended way is to follow the instructions on a [docs page](https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html#start-a-new-project).
+1 - ESP 32.
+2 - Display LCD i2c.
+3 - Botão normalmente aberto.
+4 - Led RGB.
 
-## Example folder contents
+No caso, todos estes dispositivos estão presentes no módulo utilizado, elaborado pelo professor da disciplina.
 
-The project **sample_project** contains one source file in C language [main.c](main/main.c). The file is located in folder [main](main).
+O objetivo do programa desenvolvido consiste em controlar as cores de um LED RGB a partir de comandos do usuário em um botão, bem como na demonstração dos efeitos de _fade up_ e _fade down_, implementados via hardware.
 
-ESP-IDF projects are built using CMake. The project build configuration is contained in `CMakeLists.txt`
-files that provide set of directives and instructions describing the project's source files and targets
-(executable, library, or both). 
+## Organização do Código
 
-Below is short explanation of remaining files in the project folder.
-
-```
-├── CMakeLists.txt
-├── main
-│   ├── CMakeLists.txt
-│   └── main.c
-└── README.md                  This is the file you are currently reading
-```
-Additionally, the sample project contains Makefile and component.mk files, used for the legacy Make based build system. 
-They are not used or needed when building with CMake and idf.py.
