@@ -14,8 +14,11 @@
 Para que o código seja compilado e executado com sucesso, necessita-se a disponibilidade dos seguintes componentes:
 
 1 - ESP 32.
+
 2 - Display LCD i2c.
+
 3 - Botão normalmente aberto.
+
 4 - Led RGB.
 
 No caso, todos estes dispositivos estão presentes no módulo utilizado, elaborado pelo professor da disciplina.
