@@ -73,3 +73,6 @@ O objetivo do programa desenvolvido consiste em controlar as cores de um LED RGB
 
 ### Modo Fade OUT
 - O usuário define, no processo anterior, a cor que será tomada como base para a realização do processo de decremento do brilho (_fade out_ ou _fade down_), visando fazer com que todos os LEDs do RGB apaguem, ou seja, que seus respectivos duty cycles sejam levados a zero.
+- Sendo assim, o processo de decremento foi definido de forma flexível o suficiente para que fosse realizado a partir de diferentes valores de duty cycle para os três LEDs que compõem o RGB.
+- Este processo é muito parecido com o primeiro processo apresentado, sendo cada decremento realizado separadamente e ordenadamente, a partir do LED vermelho, depois aplicando a mesma lógica para o LED verde e, finalizado com o LED azul.
+- Portanto, as saídas tanto no terminal quanto no LCD são realizadas da mesma maneira que o primeiro processo apresentado.
