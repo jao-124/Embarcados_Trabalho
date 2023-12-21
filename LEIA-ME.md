@@ -27,3 +27,22 @@ O objetivo do programa desenvolvido consiste em controlar as cores de um LED RGB
 
 ## Organização do Código
 
+(O código é baseado no exemplo ledc_fade e nos exemplos do GPIO e I2C aplicados em aula);
+
+- São definidos os canais e modos de operação do PWM para controle do LED. Além disso, são definidos os pinos de saída do PWM, dos GPIOs do botão, e das linhas de comunicação I2C do display LCD (SCL e SDA).
+
+- São definidas variáveis para guardar resultados de operações intermediárias, bem como o valor instantâneo do duty cicle de cada canal do LED RGB (um para cada cor).
+
+- É feita a declaração das funções do fade.
+
+- Criam-se as estruturas para passagem de parâmetros via fila (queue).
+
+- É criada a flag de interrupção do GPIO.
+
+- Declaram-se as filas.
+
+- A task do GPIO é definida. Nela, recebe-se o número da porta correspondente ao botão acionado, que é enviado da interrupção. Ainda na task, incrementa-se uma variável a cada seleção do botão, que resultará na escolha das cores na _"main"_.
+
+- Na _"main"_, as configurações de GPIO para os botões são inicializadas, a task do GPIO é instalada, a comunicação do display é inicializada e as definições de fade são configuradas.
+
+- No loop da _"main"_, faz-se, primeiramente, o _fade up_ dos três canais ao nível máximo; em seguida, recebe-se da task do botão, via fila, o valor da cor selecionada. Faz-se tanto o _fade up_ quanto o _fade down_ somente para a cor selecionada. No LCD, identifica-se o LED e o percentual do duty cicle correspondente.
